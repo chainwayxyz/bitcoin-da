@@ -1,0 +1,38 @@
+[package]
+name = "bitcoin-da"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Chainway <info@chainway.xyz>"]
+homepage = "https://www.chainway.xyz"
+publish = false
+repository = "https://github.com/chainway/bitcoin-da"
+rust-version = "1.66"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", rev = "96f81f2" }
+
+tokio = { version = "1", features = ["full"], optional = true }
+
+reqwest = { version = "0.11.13", features = ["blocking", "json"], optional = true }
+base64 = "0.13.1"
+hex = { version = "0.4.3", features = ["serde"] }
+tracing = "0.1.37"
+rand = "0.8.5"
+serde = "1.0.188"
+serde_json = "1.0.105"
+async-trait = "0.1.73"
+borsh = "0.10.3"
+anyhow = "1.0.75"
+thiserror = "1.0.47"
+
+bitcoin = { version = "=0.29.1", features = ["serde"] }
+ord = "=0.8.0"
+
+[features]
+default = ["native"]
+native = ["dep:tokio", "dep:reqwest"]
+serde = []
+verifier = []
