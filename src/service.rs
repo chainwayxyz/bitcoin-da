@@ -71,7 +71,7 @@ pub struct DaServiceConfig {
 }
 
 const FINALITY_DEPTH: u64 = 4; // blocks
-const POLLING_INTERVAL: u64 = 10; // seconds
+const POLLING_INTERVAL: u64 = 1; // seconds
 
 impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
