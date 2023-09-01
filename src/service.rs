@@ -75,7 +75,7 @@ const POLLING_INTERVAL: u64 = 10; // seconds
 
 impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
-    async fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
+    pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
         let client = BitcoinNode::new(config.node_url, config.node_username, config.node_password);
 
         Self::with_client(
@@ -343,7 +343,6 @@ mod tests {
                 rollup_name: "sov-btc".to_string(),
             },
         )
-        .await
     }
 
     #[tokio::test]
