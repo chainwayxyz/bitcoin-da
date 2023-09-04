@@ -5,20 +5,21 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 
 use anyhow::Context;
+use bitcoin::absolute::LockTime;
 use bitcoin::blockdata::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
 use bitcoin::blockdata::opcodes::OP_FALSE;
 use bitcoin::blockdata::script;
 use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::key::{TapTweak, TweakedPublicKey, UntweakedKeyPair};
 use bitcoin::psbt::Prevouts;
-use bitcoin::schnorr::{TapTweak, TweakedPublicKey, UntweakedKeyPair};
+use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::constants::SCHNORR_SIGNATURE_SIZE;
 use bitcoin::secp256k1::schnorr::Signature;
-use bitcoin::secp256k1::{self, Secp256k1};
-use bitcoin::util::sighash::SighashCache;
-use bitcoin::util::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
+use bitcoin::secp256k1::{self, Secp256k1, XOnlyPublicKey};
+use bitcoin::sighash::SighashCache;
+use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
 use bitcoin::{
-    Address, Amount, Network, OutPoint, PackedLockTime, Script, Sequence, Transaction, TxIn, TxOut,
-    Witness, XOnlyPublicKey,
+    Address, Amount, Network, OutPoint, Script, Sequence, Transaction, TxIn, TxOut, Witness,
 };
 use ord::{FeeRate, SatPoint, TransactionBuilder};
 
@@ -35,7 +36,7 @@ pub fn sign_blob_with_private_key(
     blob: &[u8],
     private_key: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), ()> {
-    let message = sha256d::Hash::hash(blob).into_inner();
+    let message = sha256d::Hash::hash(blob).to_byte_array();
     let secp = Secp256k1::new();
     let key = secp256k1::SecretKey::from_str(private_key).unwrap();
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &key);
@@ -63,7 +64,7 @@ fn build_reveal_transaction(
             sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
         }],
         output: vec![output],
-        lock_time: PackedLockTime::ZERO,
+        lock_time: LockTime::ZERO,
         version: 1,
     };
 
@@ -105,20 +106,21 @@ pub fn create_inscription_transactions(
 
     // create inscription content
     let mut reveal_script_builder = script::Builder::new()
-        .push_slice(&public_key.serialize())
+        .push_slice(public_key.serialize())
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(ROLLUP_NAME_TAG)
-        .push_slice(rollup_name.as_bytes())
-        .push_slice(SIGNATURE_TAG)
-        .push_slice(&signature)
-        .push_slice(PUBLICKEY_TAG)
-        .push_slice(&sequencer_public_key)
-        .push_slice(BODY_TAG);
+        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(signature).unwrap())
+        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
+        .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
 
     for chunk in body.chunks(520) {
-        reveal_script_builder = reveal_script_builder.push_slice(chunk);
+        reveal_script_builder =
+            reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
     }
 
     reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
@@ -142,7 +144,7 @@ pub fn create_inscription_transactions(
         reveal_fee_rate,
         OutPoint::null(),
         TxOut {
-            script_pubkey: destination.script_pubkey(),
+            script_pubkey: destination.payload.script_pubkey(),
             value: 0,
         },
         &reveal_script,
@@ -160,7 +162,7 @@ pub fn create_inscription_transactions(
         );
     }
 
-    let unsigned_commit_tx: Transaction = TransactionBuilder::build_transaction_with_value(
+    let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
         satpoint,
         BTreeMap::new(),
         amounts,
@@ -188,7 +190,7 @@ pub fn create_inscription_transactions(
             vout: vout.try_into().unwrap(),
         },
         TxOut {
-            script_pubkey: destination.script_pubkey(),
+            script_pubkey: destination.payload.script_pubkey(),
             value: output.value,
         },
         &reveal_script,
@@ -213,12 +215,12 @@ pub fn create_inscription_transactions(
             0,
             &Prevouts::All(&[output]),
             TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
-            bitcoin::SchnorrSighashType::Default,
+            bitcoin::sighash::TapSighashType::Default,
         )
         .unwrap();
 
     let signature = secp256k1.sign_schnorr(
-        &secp256k1::Message::from_slice(signature_hash.as_inner())
+        &secp256k1::Message::from_slice(signature_hash.as_byte_array())
             .expect("should be cryptographically secure hash"),
         &key_pair,
     );

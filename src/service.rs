@@ -4,9 +4,9 @@ use core::time::Duration;
 
 use async_trait::async_trait;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::hex::ToHex;
 use bitcoin::hashes::Hash;
 use bitcoin::Address;
+use hex::ToHex;
 use ord::SatPoint;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::services::da::DaService;
@@ -76,12 +76,20 @@ const POLLING_INTERVAL: u64 = 10; // seconds
 impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
     pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
-        let client = BitcoinNode::new(config.node_url, config.node_username, config.node_password);
+        let network =
+            bitcoin::Network::from_str(&config.network.unwrap_or("regtest".to_owned())).unwrap(); // default to regtest (?)
+
+        let client = BitcoinNode::new(
+            config.node_url,
+            config.node_username,
+            config.node_password,
+            network,
+        );
 
         Self::with_client(
             client,
             chain_params.rollup_name,
-            bitcoin::Network::from_str(&config.network.unwrap_or("regtest".to_owned())).unwrap(), // default to regtest (?)
+            network,
             config.address.unwrap_or("".to_owned()),
             config.sequencer_da_private_key.unwrap_or("".to_owned()),
         )
@@ -183,7 +191,7 @@ impl DaService for BitcoinService {
                 let relevant_tx = BlobWithSender::new(
                     blob,
                     AddressWrapper(tx.sender.clone()),
-                    tx.transaction.txid().as_hash().into_inner(),
+                    tx.transaction.txid().to_raw_hash().to_byte_array(),
                 );
 
                 txs.push(relevant_tx);
@@ -208,7 +216,7 @@ impl DaService for BitcoinService {
         let block_txs = block
             .txdata
             .iter()
-            .map(|tx| tx.transaction.txid().as_hash().into_inner())
+            .map(|tx| tx.transaction.txid().to_raw_hash().to_byte_array())
             .collect::<Vec<_>>();
 
         let inclusion_proof = InclusionMultiProof { txs: block_txs };
@@ -261,7 +269,7 @@ impl DaService for BitcoinService {
         let satpoint: SatPoint = get_satpoint_to_inscribe(&utxos[0]);
 
         // return funds to sequencer address
-        let destination_address = Address::from_str(&address.clone())?;
+        let destination_address = Address::from_str(&address.clone())?.require_network(network)?;
 
         // sign the blob for authentication of the sequencer
         let (signature, public_key) = sign_blob_with_private_key(&blob, &sequencer_da_private_key)
@@ -288,7 +296,7 @@ impl DaService for BitcoinService {
         // sign inscribe transactions
         let serialized_unsigned_commit_tx = &encode::serialize(&unsigned_commit_tx);
         let signed_raw_commit_tx = client
-            .sign_raw_transaction_with_wallet(serialized_unsigned_commit_tx.to_hex())
+            .sign_raw_transaction_with_wallet(serialized_unsigned_commit_tx.encode_hex())
             .await?;
 
         // send inscribe transactions
@@ -300,12 +308,12 @@ impl DaService for BitcoinService {
         // write reveal tx to file, it can be used to continue revealing blob if something goes wrong
         write_reveal_tx(
             serialized_reveal_tx,
-            unsigned_commit_tx.txid().as_hash().to_string(),
+            unsigned_commit_tx.txid().to_raw_hash().to_string(),
         );
 
         // send reveal tx
         let reveal_tx_hash = client
-            .send_raw_transaction(serialized_reveal_tx.to_hex())
+            .send_raw_transaction(serialized_reveal_tx.encode_hex())
             .await?;
 
         info!("Blob inscribe tx sent. Hash: {}", reveal_tx_hash);
@@ -317,12 +325,12 @@ impl DaService for BitcoinService {
 #[cfg(test)]
 mod tests {
     use bitcoin::hashes::Hash;
+    use bitcoin::{merkle_tree, Txid};
     use sov_rollup_interface::services::da::DaService;
 
     use super::BitcoinService;
     use crate::helpers::parsers::parse_transaction;
     use crate::service::DaServiceConfig;
-    use crate::spec::merkletree::BitcoinMerkleTree;
     use crate::spec::RollupParams;
 
     async fn get_service() -> BitcoinService {
@@ -370,7 +378,7 @@ mod tests {
         let da_service = get_service().await;
 
         let block = da_service
-            .get_block_at(131)
+            .get_block_at(1009)
             .await
             .expect("Failed to get block");
         // panic!();
@@ -387,7 +395,7 @@ mod tests {
         let da_service = get_service().await;
 
         let block = da_service
-            .get_block_at(131)
+            .get_block_at(1009)
             .await
             .expect("Failed to get block");
 
@@ -399,12 +407,25 @@ mod tests {
             return;
         }
 
-        let tx_root = block.header.header.merkle_root.as_hash().into_inner();
+        let tx_root = block
+            .header
+            .header
+            .merkle_root
+            .to_raw_hash()
+            .to_byte_array();
 
         println!();
 
-        let tree_from_inclusion = BitcoinMerkleTree::from_leaves(inclusion_proof.txs.clone());
-        let root_from_inclusion = tree_from_inclusion.get_root().unwrap();
+        let tx_hashes = inclusion_proof
+            .txs
+            .iter()
+            .map(|tx| Txid::from_slice(tx).unwrap())
+            .collect::<Vec<_>>();
+
+        let root_from_inclusion = merkle_tree::calculate_root(tx_hashes.into_iter())
+            .unwrap()
+            .to_raw_hash()
+            .to_byte_array();
 
         // Assert all blob hashes (tx_hashes) are included in the block txs
         txs.iter().for_each(|tx| {
@@ -417,14 +438,18 @@ mod tests {
         println!("\n--- Inclusion proof verified ---");
 
         // completeness proof
+        // TODO: https://github.com/chainwayxyz/bitcoin-da/issues/2
         let tx_ids = completeness_proof
             .iter()
-            .map(|tx| tx.transaction.txid().as_hash().into_inner())
+            .map(|tx| tx.transaction.txid())
             .collect::<Vec<_>>();
 
-        let tree_from_completeness = BitcoinMerkleTree::from_leaves(tx_ids);
+        let root_from_completeness = merkle_tree::calculate_root(tx_ids.into_iter())
+            .unwrap()
+            .to_raw_hash()
+            .to_byte_array();
 
-        assert_eq!(tree_from_completeness.get_root().unwrap(), tx_root);
+        assert_eq!(root_from_completeness, tx_root);
         println!("\n--- Root from completeness proof verified ---");
 
         let relevant_txs = txs
@@ -435,7 +460,9 @@ mod tests {
         // get non-included txs
         let irrelevant_txs = completeness_proof
             .iter()
-            .filter(|tx| !relevant_txs.contains_key(&tx.transaction.txid().as_hash().into_inner()))
+            .filter(|tx| {
+                !relevant_txs.contains_key(&tx.transaction.txid().to_raw_hash().to_byte_array())
+            })
             .collect::<Vec<_>>();
 
         for irrelevant_tx in irrelevant_txs {

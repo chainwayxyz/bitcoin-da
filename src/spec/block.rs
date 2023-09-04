@@ -33,8 +33,8 @@ impl SlotData for BitcoinBlock {
                 .header
                 .prev_blockhash
                 .clone()
-                .as_hash()
-                .into_inner(),
+                .as_raw_hash()
+                .to_byte_array(),
             block_hash: self.header.hash().as_ref().try_into().unwrap(),
         }
     }

@@ -2,9 +2,10 @@ use core::fmt::Display;
 use core::str::FromStr;
 
 use anyhow::Ok;
+use bitcoin::block::{Header, Version};
 use bitcoin::consensus::Decodable;
-use bitcoin::hashes::hex::FromHex;
-use bitcoin::{Address, BlockHash, BlockHeader, Transaction, TxMerkleNode};
+use bitcoin::hash_types::TxMerkleNode;
+use bitcoin::{Address, BlockHash, CompactTarget, Network, Transaction};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -42,9 +43,10 @@ struct Response<R = String> {
 pub struct BitcoinNode {
     url: String,
     client: reqwest::Client,
+    network: Network,
 }
 impl BitcoinNode {
-    pub fn new(url: String, username: String, password: String) -> Self {
+    pub fn new(url: String, username: String, password: String, network: Network) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(
             "Authorization",
@@ -61,7 +63,11 @@ impl BitcoinNode {
             .build()
             .unwrap();
 
-        Self { url, client }
+        Self {
+            url,
+            client,
+            network,
+        }
     }
 
     async fn call<T: serde::de::DeserializeOwned>(
@@ -117,15 +123,16 @@ impl BitcoinNode {
 
         let full_block: serde_json::Value = serde_json::from_str(&result)?;
 
-        let header: BlockHeader = BlockHeader {
-            bits: u32::from_str_radix(full_block.get("bits").unwrap().as_str().unwrap(), 16)
-                .unwrap(),
-            merkle_root: TxMerkleNode::from_hex(
+        let header: Header = Header {
+            bits: CompactTarget::from_consensus(
+                u32::from_str_radix(full_block.get("bits").unwrap().as_str().unwrap(), 16).unwrap(),
+            ),
+            merkle_root: TxMerkleNode::from_str(
                 full_block.get("merkleroot").unwrap().as_str().unwrap(),
             )
             .unwrap(),
             nonce: full_block.get("nonce").unwrap().as_i64().unwrap() as u32,
-            prev_blockhash: BlockHash::from_hex(
+            prev_blockhash: BlockHash::from_str(
                 full_block
                     .get("previousblockhash")
                     .unwrap()
@@ -134,7 +141,9 @@ impl BitcoinNode {
             )
             .unwrap(),
             time: full_block.get("time").unwrap().as_i64().unwrap() as u32,
-            version: full_block.get("version").unwrap().as_i64().unwrap() as i32,
+            version: Version::from_consensus(
+                full_block.get("version").unwrap().as_i64().unwrap() as i32
+            ),
         };
 
         let txdata = full_block.get("tx").unwrap().as_array().unwrap();
@@ -184,7 +193,10 @@ impl BitcoinNode {
 
     // get_change_address returns a change address for the wallet of bitcoind
     async fn get_change_address(&self) -> Result<Address, anyhow::Error> {
-        self.call::<Address>("getrawchangeaddress", vec![]).await
+        let address_string = self.call::<String>("getrawchangeaddress", vec![]).await?;
+        Ok(Address::from_str(&address_string)?
+            .require_network(self.network)
+            .unwrap())
     }
 
     pub async fn get_change_addresses(&self) -> Result<[Address; 2], anyhow::Error> {
@@ -244,6 +256,7 @@ mod tests {
             "http://localhost:38332".to_string(),
             "chainway".to_string(),
             "topsecret".to_string(),
+            bitcoin::Network::Regtest,
         )
     }
 
