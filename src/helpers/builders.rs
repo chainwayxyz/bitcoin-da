@@ -23,7 +23,7 @@ use bitcoin::{
 };
 use ord::{FeeRate, SatPoint, TransactionBuilder};
 
-use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
+use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG, RANDOM_TAG};
 use crate::spec::utxo::UTXO;
 
 pub fn get_satpoint_to_inscribe(utxo: &UTXO) -> SatPoint {
@@ -104,52 +104,6 @@ pub fn create_inscription_transactions(
     let key_pair = UntweakedKeyPair::new(&secp256k1, &mut rand::thread_rng());
     let (public_key, _parity) = XOnlyPublicKey::from_keypair(&key_pair);
 
-    // create inscription content
-    let mut reveal_script_builder = script::Builder::new()
-        .push_slice(public_key.serialize())
-        .push_opcode(OP_CHECKSIG)
-        .push_opcode(OP_FALSE)
-        .push_opcode(OP_IF)
-        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(signature).unwrap())
-        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
-        .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
-
-    for chunk in body.chunks(520) {
-        reveal_script_builder =
-            reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
-    }
-
-    reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
-
-    let reveal_script = reveal_script_builder.into_script();
-
-    let taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, reveal_script.clone())
-        .unwrap()
-        .finalize(&secp256k1, public_key)
-        .unwrap();
-
-    let control_block = taproot_spend_info
-        .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
-        .unwrap();
-
-    let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
-
-    let (_, reveal_fee) = build_reveal_transaction(
-        &control_block,
-        reveal_fee_rate,
-        OutPoint::null(),
-        TxOut {
-            script_pubkey: destination.payload.script_pubkey(),
-            value: 0,
-        },
-        &reveal_script,
-    );
-
     let mut amounts: BTreeMap<OutPoint, Amount> = BTreeMap::new();
 
     for utxo in utxos {
@@ -162,40 +116,139 @@ pub fn create_inscription_transactions(
         );
     }
 
-    let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
-        satpoint,
-        BTreeMap::new(),
-        amounts,
-        commit_tx_address.clone(),
-        change,
-        FeeRate::try_from(commit_fee_rate).unwrap(),
-        reveal_fee + Amount::from_sat(546),
-    )
-    .unwrap();
+    // create inscription content
+    let reveal_script_builder = script::Builder::new()
+        .push_slice(public_key.serialize())
+        .push_opcode(OP_CHECKSIG)
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(signature).unwrap())
+        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
+        .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap());
 
-    let (vout, output) = unsigned_commit_tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_vout, output)| {
-            output.script_pubkey.to_bytes() == commit_tx_address.script_pubkey().to_bytes()
-        })
+    let mut random: i32 = 0;
+    let (
+        unsigned_commit_tx,
+        mut reveal_tx,
+        fee,
+        output,
+        reveal_script,
+        control_block,
+        taproot_spend_info,
+        commit_tx_address,
+    ) = loop {
+        println!("Random: {:?}", random);
+
+        let mut reveal_script_builder = reveal_script_builder.clone();
+        let change = change.clone();
+        let amounts = amounts.clone();
+
+        reveal_script_builder = reveal_script_builder
+            .push_slice(PushBytesBuf::try_from(random.to_be_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
+        for chunk in body.chunks(520) {
+            reveal_script_builder =
+                reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
+        }
+        reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let taproot_spend_info = TaprootBuilder::new()
+            .add_leaf(0, reveal_script.clone())
+            .unwrap()
+            .finalize(&secp256k1, public_key)
+            .unwrap();
+
+        let control_block = taproot_spend_info
+            .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
+            .unwrap();
+
+        let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
+
+        let (_, reveal_fee) = build_reveal_transaction(
+            &control_block,
+            reveal_fee_rate,
+            OutPoint::null(),
+            TxOut {
+                script_pubkey: destination.payload.script_pubkey(),
+                value: 0,
+            },
+            &reveal_script,
+        );
+
+        let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
+            satpoint,
+            BTreeMap::new(),
+            amounts,
+            commit_tx_address.clone(),
+            change,
+            FeeRate::try_from(commit_fee_rate).unwrap(),
+            reveal_fee + Amount::from_sat(546),
+        )
         .unwrap();
 
-    let (mut reveal_tx, fee) = build_reveal_transaction(
-        &control_block,
-        reveal_fee_rate,
-        OutPoint {
-            txid: unsigned_commit_tx.txid(),
-            vout: vout.try_into().unwrap(),
-        },
-        TxOut {
-            script_pubkey: destination.payload.script_pubkey(),
-            value: output.value,
-        },
-        &reveal_script,
-    );
+        let (vout, output) = {
+            let (commit_script_pubkey, commit_value) = (
+                commit_tx_address.script_pubkey().to_bytes(),
+                destination.payload.script_pubkey(),
+            );
+        
+            unsigned_commit_tx
+                .output
+                .iter()
+                .enumerate()
+                .find(|(_, output)| {
+                    output.script_pubkey.to_bytes() == commit_script_pubkey
+                })
+                .map(|(vout, output)| {
+                    (
+                        vout,
+                        TxOut {
+                            script_pubkey: commit_value.clone(),
+                            value: output.value,
+                        },
+                    )
+                })
+                .unwrap()
+        };
 
+        let (reveal_tx, fee) = build_reveal_transaction(
+            &control_block,
+            reveal_fee_rate,
+            OutPoint {
+                txid: unsigned_commit_tx.txid(),
+                vout: vout as u32,
+            },
+            output.clone(),
+            &reveal_script,
+        );
+
+        let reveal_hash = reveal_tx.txid().as_raw_hash().to_byte_array();
+
+        // check if first two bytes are 0
+        if reveal_hash.starts_with(&[0, 0]) {
+            println!("Reveal tx hash: {:?}", reveal_hash);
+            break (
+                unsigned_commit_tx,
+                reveal_tx,
+                fee,
+                output,
+                reveal_script,
+                control_block,
+                taproot_spend_info,
+                commit_tx_address,
+            );
+        } 
+        
+        random += 1;
+        println!("Current first two bytes: {:?}", reveal_hash);
+    };
+    
     reveal_tx.output[0].value = reveal_tx.output[0]
         .value
         .checked_sub(fee.to_sat())
