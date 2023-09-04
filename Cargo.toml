@@ -28,8 +28,8 @@ borsh = "0.10.3"
 anyhow = "1.0.75"
 thiserror = "1.0.47"
 
-bitcoin = { version = "=0.29.1", features = ["serde"] }
-ord = "=0.8.0"
+bitcoin = { version = "0.30.1", features = ["serde", "rand"] }
+ord = "=0.8.1"
 
 [features]
 default = ["native"]

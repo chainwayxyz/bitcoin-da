@@ -4,7 +4,7 @@ use bitcoin::blockdata::opcodes::all::{OP_ENDIF, OP_IF};
 use bitcoin::blockdata::script::{Instruction, Instructions};
 use bitcoin::hashes::sha256d;
 use bitcoin::secp256k1::{self, ecdsa, Message, Secp256k1};
-use bitcoin::util::taproot::TAPROOT_ANNEX_PREFIX;
+use bitcoin::taproot::TAPROOT_ANNEX_PREFIX;
 use bitcoin::{Script, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +24,7 @@ pub fn parse_transaction(tx: &Transaction, rollup_name: &str) -> Result<ParsedIn
 }
 
 // Returns the script from the first input of the transaction
-fn get_script(tx: &Transaction) -> Result<Script, ()> {
+fn get_script(tx: &Transaction) -> Result<&Script, ()> {
     if tx.input[0].witness.len() > 1 {
         let witness = &tx.input[0].witness;
 
@@ -43,7 +43,7 @@ fn get_script(tx: &Transaction) -> Result<Script, ()> {
             })
             .unwrap();
 
-        let script = Script::from(Vec::from(script));
+        let script = Script::from_bytes(script);
 
         Ok(script)
     } else {
@@ -63,7 +63,7 @@ fn parse_relevant_inscriptions(
         };
 
         match instruction {
-            Instruction::PushBytes(bytes) if bytes == BODY_TAG => {}
+            Instruction::PushBytes(bytes) if bytes.as_bytes() == BODY_TAG => {}
             _ => continue,
         }
 
@@ -77,40 +77,42 @@ fn parse_relevant_inscriptions(
         }
 
         let _bytes = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes == ROLLUP_NAME_TAG => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == ROLLUP_NAME_TAG => bytes,
             _ => continue,
         };
 
         let rollup_name_bytes = rollup_name.as_bytes();
         let _bytes = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes == rollup_name_bytes => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == rollup_name_bytes => {
+                bytes
+            }
             _ => continue,
         };
 
         let _bytes = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes == SIGNATURE_TAG => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == SIGNATURE_TAG => bytes,
             _ => continue,
         };
 
         let signature = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) => bytes.as_bytes(),
             _ => continue,
         };
         // Found signature
 
         let _bytes = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes == PUBLICKEY_TAG => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == PUBLICKEY_TAG => bytes,
             _ => continue,
         };
 
         let public_key = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) => bytes.as_bytes(),
             _ => continue,
         };
         // Found public key
 
         let _bytes = match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes == BODY_TAG => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == BODY_TAG => bytes,
             _ => continue,
         };
 
@@ -118,7 +120,7 @@ fn parse_relevant_inscriptions(
         loop {
             match instructions.next() {
                 Some(Ok(Instruction::PushBytes(bytes))) => {
-                    body.extend(bytes);
+                    body.extend(bytes.as_bytes());
                 }
                 Some(Ok(Instruction::Op(op))) if op == OP_ENDIF => {
                     return Ok(ParsedInscription {

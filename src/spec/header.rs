@@ -1,4 +1,4 @@
-use bitcoin::BlockHeader;
+use bitcoin::block::Header;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::BlockHeaderTrait;
 
@@ -7,7 +7,7 @@ use super::block_hash::BlockHashWrapper;
 // BlockHashWrapper is a wrapper around BlockHash to implement BlockHashTrait
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct HeaderWrapper {
-    pub header: BlockHeader,
+    pub header: Header,
     pub tx_count: u32,
 }
 

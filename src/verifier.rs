@@ -1,4 +1,5 @@
 use bitcoin::hashes::Hash;
+use bitcoin::{merkle_tree, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::{DaSpec, DaVerifier};
@@ -7,7 +8,6 @@ use sov_rollup_interface::zk::ValidityCondition;
 use thiserror::Error;
 
 use crate::helpers::parsers::parse_transaction;
-use crate::spec::merkletree::BitcoinMerkleTree;
 use crate::spec::BitcoinSpec;
 
 pub struct BitcoinVerifier {
@@ -75,19 +75,39 @@ impl DaVerifier for BitcoinVerifier {
         completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
         let validity_condition = ChainValidityCondition {
-            prev_hash: block_header.header.prev_blockhash.as_hash().into_inner(),
-            block_hash: block_header.header.block_hash().as_hash().into_inner(),
+            prev_hash: block_header
+                .header
+                .prev_blockhash
+                .to_raw_hash()
+                .to_byte_array(),
+            block_hash: block_header
+                .header
+                .block_hash()
+                .to_raw_hash()
+                .to_byte_array(),
         };
 
-        let tx_root = block_header.header.merkle_root.as_hash().into_inner();
+        let tx_root = block_header
+            .header
+            .merkle_root
+            .to_raw_hash()
+            .to_byte_array();
 
         if txs.is_empty() {
             return Ok(validity_condition);
         }
 
         // Inclusion proof is all the txs in the block.
-        let tree_from_inclusion = BitcoinMerkleTree::from_leaves(inclusion_proof.txs.clone());
-        let root_from_inclusion = tree_from_inclusion.get_root().unwrap();
+        let tx_hashes = inclusion_proof
+            .txs
+            .iter()
+            .map(|tx| Txid::from_slice(tx).unwrap())
+            .collect::<Vec<_>>();
+
+        let root_from_inclusion = merkle_tree::calculate_root(tx_hashes.into_iter())
+            .unwrap()
+            .to_raw_hash()
+            .to_byte_array();
 
         txs.iter().for_each(|tx| {
             assert!(inclusion_proof.txs.contains(&tx.hash));
@@ -95,16 +115,19 @@ impl DaVerifier for BitcoinVerifier {
 
         assert_eq!(root_from_inclusion, tx_root);
 
+        // TODO: https://github.com/chainwayxyz/bitcoin-da/issues/2
         // Completeness proof is all the txs in the block.
         // 1. Generate merkle tree and assert roots are the same
         // 2. Go over all txs and assert txs outside relevant_txs don't have specific script
         let tx_ids = completeness_proof
             .iter()
-            .map(|tx| tx.transaction.txid().as_hash().into_inner())
+            .map(|tx| tx.transaction.txid())
             .collect::<Vec<_>>();
 
-        let tree_from_completeness = BitcoinMerkleTree::from_leaves(tx_ids);
-        let root_from_completeness = tree_from_completeness.get_root().unwrap();
+        let root_from_completeness = merkle_tree::calculate_root(tx_ids.into_iter())
+            .unwrap()
+            .to_raw_hash()
+            .to_byte_array();
 
         assert_eq!(root_from_completeness, tx_root);
 
@@ -116,7 +139,9 @@ impl DaVerifier for BitcoinVerifier {
         // get non-included txs
         let irrelevant_txs = completeness_proof
             .iter()
-            .filter(|tx| !relevant_txs.contains_key(&tx.transaction.txid().as_hash().into_inner()))
+            .filter(|tx| {
+                !relevant_txs.contains_key(&tx.transaction.txid().to_raw_hash().to_byte_array())
+            })
             .collect::<Vec<_>>();
 
         for irrelevant_tx in irrelevant_txs {
