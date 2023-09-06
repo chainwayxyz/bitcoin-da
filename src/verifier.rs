@@ -128,13 +128,13 @@ impl DaVerifier for BitcoinVerifier {
             .collect::<std::collections::HashSet<_>>();
 
         completeness_proof.iter().for_each(|tx| {
-            let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
+            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
             // it must have two leading zeros in the hash
             assert_eq!(tx_hash[0..2], [0, 0]);
 
             // it must parsed correctly
-            let parsed_tx = parse_transaction(&tx.transaction, &self.rollup_name);
+            let parsed_tx = parse_transaction(&tx, &self.rollup_name);
             if parsed_tx.is_ok() {
                 // it must be in txs
                 assert!(txs_to_check.contains(&tx_hash));

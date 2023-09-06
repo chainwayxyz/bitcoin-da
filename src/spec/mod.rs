@@ -1,3 +1,4 @@
+use bitcoin::Transaction;
 use sov_rollup_interface::da::DaSpec;
 
 use self::blob::BlobWithSender;
@@ -35,7 +36,7 @@ impl DaSpec for BitcoinSpec {
     type InclusionMultiProof = InclusionMultiProof;
 
     // Issue: https://github.com/chainwayxyz/bitcoin-da/issues/2
-    type CompletenessProof = Vec<ExtendedTransaction>;
+    type CompletenessProof = Vec<Transaction>;
 
     type ValidityCondition = ChainValidityCondition;
 }

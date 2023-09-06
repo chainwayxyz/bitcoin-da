@@ -223,7 +223,7 @@ impl DaService for BitcoinService {
 
                 // if tx_hash has two leading zeros, it is in the completeness proof
                 if tx_hash[0..2] == [0, 0] {
-                    completeness_proof.push(tx.clone());
+                    completeness_proof.push(tx.transaction.clone());
                 }
 
                 tx_hash
@@ -348,7 +348,7 @@ mod tests {
             node_username: "chainway".to_string(),
             node_password: "topsecret".to_string(),
             network: Some("regtest".to_string()),
-            address: Some("bcrt1qyxexhcc7vcgvzlg5dncqg383frkeawp39eag4k".to_string()),
+            address: Some("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl".to_string()),
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
@@ -367,7 +367,7 @@ mod tests {
         let da_service = get_service().await;
 
         da_service
-            .get_finalized_at(131)
+            .get_finalized_at(132)
             .await
             .expect("Failed to get block");
     }
@@ -377,7 +377,7 @@ mod tests {
         let da_service = get_service().await;
 
         da_service
-            .get_block_at(131)
+            .get_block_at(132)
             .await
             .expect("Failed to get block");
     }
@@ -387,7 +387,7 @@ mod tests {
         let da_service = get_service().await;
 
         let block = da_service
-            .get_block_at(1009)
+            .get_block_at(132)
             .await
             .expect("Failed to get block");
         // panic!();
@@ -404,7 +404,7 @@ mod tests {
         let da_service = get_service().await;
 
         let block = da_service
-            .get_block_at(1009)
+            .get_block_at(132)
             .await
             .expect("Failed to get block");
 
@@ -458,13 +458,13 @@ mod tests {
             .collect::<std::collections::HashSet<_>>();
 
         completeness_proof.iter().for_each(|tx| {
-            let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
+            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
             // it must have two leading zeros in the hash
             assert_eq!(tx_hash[0..2], [0, 0]);
 
             // it must parsed correctly
-            let parsed_tx = parse_transaction(&tx.transaction, &da_service.rollup_name);
+            let parsed_tx = parse_transaction(&tx, &da_service.rollup_name);
             if parsed_tx.is_ok() {
                 // it must be in txs
                 assert!(txs_to_check.contains(&tx_hash));

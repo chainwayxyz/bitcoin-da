@@ -134,8 +134,6 @@ pub fn create_inscription_transactions(
     // Start loop to find a random number that makes the first two bytes of the reveal tx hash 0
     let mut random: i64 = 0;
     loop {
-        println!("Random: {:?}", random);
-
         // ownerships are moved to the loop
         let mut reveal_script_builder = reveal_script_builder.clone();
         let change = change.clone();
@@ -213,22 +211,22 @@ pub fn create_inscription_transactions(
             &reveal_script,
         );
 
+        reveal_tx.output[0].value = reveal_tx.output[0]
+        .value
+        .checked_sub(fee.to_sat())
+        .context("commit transaction output value insufficient to pay transaction fee")
+        .unwrap();
+
+        if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
+            return Err(anyhow::anyhow!(
+                "commit transaction output would be dust".to_string()
+            ));
+        }
+
         let reveal_hash = reveal_tx.txid().as_raw_hash().to_byte_array();
 
         // check if first two bytes are 0
         if reveal_hash.starts_with(&[0, 0]) {
-            reveal_tx.output[0].value = reveal_tx.output[0]
-                .value
-                .checked_sub(fee.to_sat())
-                .context("commit transaction output value insufficient to pay transaction fee")
-                .unwrap();
-
-            if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
-                return Err(anyhow::anyhow!(
-                    "commit transaction output would be dust".to_string()
-                ));
-            }
-
             // start signing reveal tx
             let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
