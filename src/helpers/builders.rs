@@ -130,12 +130,11 @@ pub fn create_inscription_transactions(
         .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
         .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap());
 
-    let mut random: i32 = 0;
+    let mut random: i64 = 0;
     let (
         unsigned_commit_tx,
         mut reveal_tx,
         fee,
-        output,
         reveal_script,
         control_block,
         taproot_spend_info,
@@ -148,7 +147,7 @@ pub fn create_inscription_transactions(
         let amounts = amounts.clone();
 
         reveal_script_builder = reveal_script_builder
-            .push_slice(PushBytesBuf::try_from(random.to_be_bytes().to_vec()).unwrap())
+            .push_int(random)
             .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
         for chunk in body.chunks(520) {
             reveal_script_builder =
@@ -192,39 +191,17 @@ pub fn create_inscription_transactions(
         )
         .unwrap();
 
-        let (vout, output) = {
-            let (commit_script_pubkey, commit_value) = (
-                commit_tx_address.script_pubkey().to_bytes(),
-                destination.payload.script_pubkey(),
-            );
-        
-            unsigned_commit_tx
-                .output
-                .iter()
-                .enumerate()
-                .find(|(_, output)| {
-                    output.script_pubkey.to_bytes() == commit_script_pubkey
-                })
-                .map(|(vout, output)| {
-                    (
-                        vout,
-                        TxOut {
-                            script_pubkey: commit_value.clone(),
-                            value: output.value,
-                        },
-                    )
-                })
-                .unwrap()
-        };
-
         let (reveal_tx, fee) = build_reveal_transaction(
             &control_block,
             reveal_fee_rate,
             OutPoint {
                 txid: unsigned_commit_tx.txid(),
-                vout: vout as u32,
+                vout: 0,
             },
-            output.clone(),
+            TxOut {
+                script_pubkey: destination.clone().script_pubkey(),
+                value: unsigned_commit_tx.output[0].value,
+            },
             &reveal_script,
         );
 
@@ -232,12 +209,10 @@ pub fn create_inscription_transactions(
 
         // check if first two bytes are 0
         if reveal_hash.starts_with(&[0, 0]) {
-            println!("Reveal tx hash: {:?}", reveal_hash);
             break (
                 unsigned_commit_tx,
                 reveal_tx,
                 fee,
-                output,
                 reveal_script,
                 control_block,
                 taproot_spend_info,
@@ -266,7 +241,7 @@ pub fn create_inscription_transactions(
     let signature_hash = sighash_cache
         .taproot_script_spend_signature_hash(
             0,
-            &Prevouts::All(&[output]),
+            &Prevouts::All(&[unsigned_commit_tx.output[0].clone()]),
             TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
             bitcoin::sighash::TapSighashType::Default,
         )
