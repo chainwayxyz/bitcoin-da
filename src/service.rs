@@ -213,15 +213,24 @@ impl DaService for BitcoinService {
             block.header.header.block_hash()
         );
 
+        let mut completeness_proof = Vec::with_capacity(block.txdata.len());
+
         let block_txs = block
             .txdata
             .iter()
-            .map(|tx| tx.transaction.txid().to_raw_hash().to_byte_array())
+            .map(|tx| {
+                let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
+
+                // if tx_hash has two leading zeros, it is in the completeness proof
+                if tx_hash[0..2] == [0, 0] {
+                    completeness_proof.push(tx.clone());
+                }
+
+                tx_hash
+            })
             .collect::<Vec<_>>();
 
         let inclusion_proof = InclusionMultiProof { txs: block_txs };
-
-        let completeness_proof = block.txdata.clone();
 
         (inclusion_proof, completeness_proof)
     }
@@ -438,39 +447,35 @@ mod tests {
         println!("\n--- Inclusion proof verified ---");
 
         // completeness proof
-        // TODO: https://github.com/chainwayxyz/bitcoin-da/issues/2
-        let tx_ids = completeness_proof
+        // iterate over completeness proof txs
+        // every tx must have two leading zeros in the hash
+        // every tx parsed correctly must be in txs
+
+        // create hash set of txs
+        let mut txs_to_check = txs
             .iter()
-            .map(|tx| tx.transaction.txid())
-            .collect::<Vec<_>>();
+            .map(|blob| blob.hash)
+            .collect::<std::collections::HashSet<_>>();
 
-        let root_from_completeness = merkle_tree::calculate_root(tx_ids.into_iter())
-            .unwrap()
-            .to_raw_hash()
-            .to_byte_array();
+        completeness_proof.iter().for_each(|tx| {
+            let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
 
-        assert_eq!(root_from_completeness, tx_root);
-        println!("\n--- Root from completeness proof verified ---");
+            // it must have two leading zeros in the hash
+            assert_eq!(tx_hash[0..2], [0, 0]);
 
-        let relevant_txs = txs
-            .iter()
-            .map(|tx| (tx.hash, true))
-            .collect::<std::collections::HashMap<_, _>>();
+            // it must parsed correctly
+            let parsed_tx = parse_transaction(&tx.transaction, &da_service.rollup_name);
+            if parsed_tx.is_ok() {
+                // it must be in txs
+                assert!(txs_to_check.contains(&tx_hash));
 
-        // get non-included txs
-        let irrelevant_txs = completeness_proof
-            .iter()
-            .filter(|tx| {
-                !relevant_txs.contains_key(&tx.transaction.txid().to_raw_hash().to_byte_array())
-            })
-            .collect::<Vec<_>>();
+                // remove tx from txs_to_check
+                txs_to_check.remove(&tx_hash);
+            }
+        });
 
-        for irrelevant_tx in irrelevant_txs {
-            // assert no relevant script in tx
-            assert!(
-                parse_transaction(&irrelevant_tx.transaction, &da_service.rollup_name).is_err()
-            );
-        }
+        // txs_to_check must be empty
+        assert!(txs_to_check.is_empty());
 
         println!("\n--- Completeness proof verified ---\n");
     }

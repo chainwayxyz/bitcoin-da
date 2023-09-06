@@ -87,15 +87,15 @@ impl DaVerifier for BitcoinVerifier {
                 .to_byte_array(),
         };
 
+        if txs.is_empty() {
+            return Ok(validity_condition);
+        }
+
         let tx_root = block_header
             .header
             .merkle_root
             .to_raw_hash()
             .to_byte_array();
-
-        if txs.is_empty() {
-            return Ok(validity_condition);
-        }
 
         // Inclusion proof is all the txs in the block.
         let tx_hashes = inclusion_proof
@@ -115,39 +115,37 @@ impl DaVerifier for BitcoinVerifier {
 
         assert_eq!(root_from_inclusion, tx_root);
 
-        // TODO: https://github.com/chainwayxyz/bitcoin-da/issues/2
-        // Completeness proof is all the txs in the block.
-        // 1. Generate merkle tree and assert roots are the same
-        // 2. Go over all txs and assert txs outside relevant_txs don't have specific script
-        let tx_ids = completeness_proof
+        // completeness proof
+        // completeness proof
+        // iterate over completeness proof txs
+        // every tx must have two leading zeros in the hash
+        // every tx parsed correctly must be in txs
+
+        // create hash set of txs
+        let mut txs_to_check = txs
             .iter()
-            .map(|tx| tx.transaction.txid())
-            .collect::<Vec<_>>();
+            .map(|blob| blob.hash)
+            .collect::<std::collections::HashSet<_>>();
 
-        let root_from_completeness = merkle_tree::calculate_root(tx_ids.into_iter())
-            .unwrap()
-            .to_raw_hash()
-            .to_byte_array();
+        completeness_proof.iter().for_each(|tx| {
+            let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
 
-        assert_eq!(root_from_completeness, tx_root);
+            // it must have two leading zeros in the hash
+            assert_eq!(tx_hash[0..2], [0, 0]);
 
-        let relevant_txs = txs
-            .iter()
-            .map(|tx| (tx.hash, true))
-            .collect::<std::collections::HashMap<_, _>>();
+            // it must parsed correctly
+            let parsed_tx = parse_transaction(&tx.transaction, &self.rollup_name);
+            if parsed_tx.is_ok() {
+                // it must be in txs
+                assert!(txs_to_check.contains(&tx_hash));
 
-        // get non-included txs
-        let irrelevant_txs = completeness_proof
-            .iter()
-            .filter(|tx| {
-                !relevant_txs.contains_key(&tx.transaction.txid().to_raw_hash().to_byte_array())
-            })
-            .collect::<Vec<_>>();
+                // remove tx from txs_to_check
+                txs_to_check.remove(&tx_hash);
+            }
+        });
 
-        for irrelevant_tx in irrelevant_txs {
-            // assert no relevant script in tx
-            assert!(parse_transaction(&irrelevant_tx.transaction, &self.rollup_name).is_err());
-        }
+        // txs_to_check must be empty
+        assert!(txs_to_check.is_empty());
 
         Ok(validity_condition)
     }
