@@ -290,3 +290,33 @@ pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
     let mut reveal_tx_writer = BufWriter::new(reveal_tx_file);
     reveal_tx_writer.write_all(tx).unwrap();
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::helpers::builders::{compress_blob, decompress_blob};
+
+    #[test]
+    fn compression_decompression() {
+        let blob = std::fs::read("test_data/blob.txt").unwrap();
+
+        // compress and measure time
+        let time = std::time::Instant::now();
+        let compressed_blob = compress_blob(&blob);
+        println!("compression time: {:?}", time.elapsed());
+
+        // decompress and measure time
+        let time = std::time::Instant::now();
+        let decompressed_blob = decompress_blob(&compressed_blob);
+        println!("decompression time: {:?}", time.elapsed());
+
+        assert_eq!(blob, decompressed_blob);
+
+        // size
+        println!("blob size: {}", blob.len());
+        println!("compressed blob size: {}", compressed_blob.len());
+        println!(
+            "compression ratio: {}",
+            (blob.len() as f64) / (compressed_blob.len() as f64)
+        );
+    }
+}
