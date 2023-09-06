@@ -134,7 +134,7 @@ impl DaVerifier for BitcoinVerifier {
             assert_eq!(tx_hash[0..2], [0, 0]);
 
             // it must parsed correctly
-            let parsed_tx = parse_transaction(&tx, &self.rollup_name);
+            let parsed_tx = parse_transaction(tx, &self.rollup_name);
             if parsed_tx.is_ok() {
                 // it must be in txs
                 assert!(txs_to_check.contains(&tx_hash));

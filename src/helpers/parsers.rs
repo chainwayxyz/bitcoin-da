@@ -7,7 +7,7 @@ use bitcoin::secp256k1::{self, ecdsa, Message, Secp256k1};
 use bitcoin::{Script, Transaction};
 use serde::{Deserialize, Serialize};
 
-use super::{BODY_TAG, PUBLICKEY_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG, RANDOM_TAG};
+use super::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedInscription {
@@ -24,7 +24,7 @@ pub fn parse_transaction(tx: &Transaction, rollup_name: &str) -> Result<ParsedIn
 
 // Returns the script from the first input of the transaction
 fn get_script(tx: &Transaction) -> Result<&Script, ()> {
-    Ok(tx.input[0].witness.tapscript().ok_or(())?)
+    tx.input[0].witness.tapscript().ok_or(())
 }
 
 // Parses the inscription from script if it is relevant to the rollup
@@ -59,7 +59,9 @@ fn parse_relevant_inscriptions(
 
         let rollup_name_bytes = rollup_name.as_bytes();
         match instructions.next() {
-            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == rollup_name_bytes => bytes,
+            Some(Ok(Instruction::PushBytes(bytes))) if bytes.as_bytes() == rollup_name_bytes => {
+                bytes
+            }
             _ => continue,
         };
 

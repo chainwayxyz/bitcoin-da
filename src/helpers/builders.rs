@@ -212,10 +212,10 @@ pub fn create_inscription_transactions(
         );
 
         reveal_tx.output[0].value = reveal_tx.output[0]
-        .value
-        .checked_sub(fee.to_sat())
-        .context("commit transaction output value insufficient to pay transaction fee")
-        .unwrap();
+            .value
+            .checked_sub(fee.to_sat())
+            .context("commit transaction output value insufficient to pay transaction fee")
+            .unwrap();
 
         if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
             return Err(anyhow::anyhow!(
