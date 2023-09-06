@@ -23,7 +23,7 @@ use bitcoin::{
 };
 use ord::{FeeRate, SatPoint, TransactionBuilder};
 
-use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
+use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
 use crate::spec::utxo::UTXO;
 
 pub fn get_satpoint_to_inscribe(utxo: &UTXO) -> SatPoint {
@@ -104,52 +104,6 @@ pub fn create_inscription_transactions(
     let key_pair = UntweakedKeyPair::new(&secp256k1, &mut rand::thread_rng());
     let (public_key, _parity) = XOnlyPublicKey::from_keypair(&key_pair);
 
-    // create inscription content
-    let mut reveal_script_builder = script::Builder::new()
-        .push_slice(public_key.serialize())
-        .push_opcode(OP_CHECKSIG)
-        .push_opcode(OP_FALSE)
-        .push_opcode(OP_IF)
-        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(signature).unwrap())
-        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
-        .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
-
-    for chunk in body.chunks(520) {
-        reveal_script_builder =
-            reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
-    }
-
-    reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
-
-    let reveal_script = reveal_script_builder.into_script();
-
-    let taproot_spend_info = TaprootBuilder::new()
-        .add_leaf(0, reveal_script.clone())
-        .unwrap()
-        .finalize(&secp256k1, public_key)
-        .unwrap();
-
-    let control_block = taproot_spend_info
-        .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
-        .unwrap();
-
-    let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
-
-    let (_, reveal_fee) = build_reveal_transaction(
-        &control_block,
-        reveal_fee_rate,
-        OutPoint::null(),
-        TxOut {
-            script_pubkey: destination.payload.script_pubkey(),
-            value: 0,
-        },
-        &reveal_script,
-    );
-
     let mut amounts: BTreeMap<OutPoint, Amount> = BTreeMap::new();
 
     for utxo in utxos {
@@ -162,86 +116,160 @@ pub fn create_inscription_transactions(
         );
     }
 
-    let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
-        satpoint,
-        BTreeMap::new(),
-        amounts,
-        commit_tx_address.clone(),
-        change,
-        FeeRate::try_from(commit_fee_rate).unwrap(),
-        reveal_fee + Amount::from_sat(546),
-    )
-    .unwrap();
+    // start creating inscription content
+    let reveal_script_builder = script::Builder::new()
+        .push_slice(public_key.serialize())
+        .push_opcode(OP_CHECKSIG)
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(signature).unwrap())
+        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
+        .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap());
+    // This envelope is not finished yet. The random number will be added later and followed by the body
 
-    let (vout, output) = unsigned_commit_tx
-        .output
-        .iter()
-        .enumerate()
-        .find(|(_vout, output)| {
-            output.script_pubkey.to_bytes() == commit_tx_address.script_pubkey().to_bytes()
-        })
-        .unwrap();
+    // Start loop to find a random number that makes the first two bytes of the reveal tx hash 0
+    let mut random: i64 = 0;
+    loop {
+        // ownerships are moved to the loop
+        let mut reveal_script_builder = reveal_script_builder.clone();
+        let change = change.clone();
+        let amounts = amounts.clone();
 
-    let (mut reveal_tx, fee) = build_reveal_transaction(
-        &control_block,
-        reveal_fee_rate,
-        OutPoint {
-            txid: unsigned_commit_tx.txid(),
-            vout: vout.try_into().unwrap(),
-        },
-        TxOut {
-            script_pubkey: destination.payload.script_pubkey(),
-            value: output.value,
-        },
-        &reveal_script,
-    );
+        // push first random number and body tag
+        reveal_script_builder = reveal_script_builder
+            .push_int(random)
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
 
-    reveal_tx.output[0].value = reveal_tx.output[0]
-        .value
-        .checked_sub(fee.to_sat())
-        .context("commit transaction output value insufficient to pay transaction fee")
-        .unwrap();
+        // push body in chunks of 520 bytes
+        for chunk in body.chunks(520) {
+            reveal_script_builder =
+                reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
+        }
+        // push end if
+        reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
 
-    if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
-        return Err(anyhow::anyhow!(
-            "commit transaction output would be dust".to_string()
-        ));
-    }
+        // finalize reveal script
+        let reveal_script = reveal_script_builder.into_script();
 
-    let mut sighash_cache = SighashCache::new(&mut reveal_tx);
+        // create spend info for tapscript
+        let taproot_spend_info = TaprootBuilder::new()
+            .add_leaf(0, reveal_script.clone())
+            .unwrap()
+            .finalize(&secp256k1, public_key)
+            .unwrap();
 
-    let signature_hash = sighash_cache
-        .taproot_script_spend_signature_hash(
-            0,
-            &Prevouts::All(&[output]),
-            TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
-            bitcoin::sighash::TapSighashType::Default,
+        // create control block for tapscript
+        let control_block = taproot_spend_info
+            .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
+            .unwrap();
+
+        // create commit tx address
+        let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
+
+        // create reveal tx to arrange fee
+        let (_, reveal_fee) = build_reveal_transaction(
+            &control_block,
+            reveal_fee_rate,
+            OutPoint::null(),
+            TxOut {
+                script_pubkey: destination.payload.script_pubkey(),
+                value: 0,
+            },
+            &reveal_script,
+        );
+
+        // build commit tx
+        let unsigned_commit_tx = TransactionBuilder::build_transaction_with_value(
+            satpoint,
+            BTreeMap::new(),
+            amounts,
+            commit_tx_address.clone(),
+            change,
+            FeeRate::try_from(commit_fee_rate).unwrap(),
+            reveal_fee + Amount::from_sat(546),
         )
         .unwrap();
 
-    let signature = secp256k1.sign_schnorr(
-        &secp256k1::Message::from_slice(signature_hash.as_byte_array())
-            .expect("should be cryptographically secure hash"),
-        &key_pair,
-    );
+        let output_to_reveal = unsigned_commit_tx.output[0].clone();
 
-    let witness = sighash_cache.witness_mut(0).unwrap();
-    witness.push(signature.as_ref());
-    witness.push(reveal_script);
-    witness.push(&control_block.serialize());
+        // build reveal tx
+        let (mut reveal_tx, fee) = build_reveal_transaction(
+            &control_block,
+            reveal_fee_rate,
+            OutPoint {
+                txid: unsigned_commit_tx.txid(),
+                vout: 0,
+            },
+            TxOut {
+                script_pubkey: destination.clone().script_pubkey(),
+                value: output_to_reveal.value,
+            },
+            &reveal_script,
+        );
 
-    let recovery_key_pair = key_pair.tap_tweak(&secp256k1, taproot_spend_info.merkle_root());
+        reveal_tx.output[0].value = reveal_tx.output[0]
+            .value
+            .checked_sub(fee.to_sat())
+            .context("commit transaction output value insufficient to pay transaction fee")
+            .unwrap();
 
-    let (x_only_pub_key, _parity) = recovery_key_pair.to_inner().x_only_public_key();
-    assert_eq!(
-        Address::p2tr_tweaked(
-            TweakedPublicKey::dangerous_assume_tweaked(x_only_pub_key),
-            network,
-        ),
-        commit_tx_address
-    );
+        if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
+            return Err(anyhow::anyhow!(
+                "commit transaction output would be dust".to_string()
+            ));
+        }
 
-    Ok((unsigned_commit_tx, reveal_tx))
+        let reveal_hash = reveal_tx.txid().as_raw_hash().to_byte_array();
+
+        // check if first two bytes are 0
+        if reveal_hash.starts_with(&[0, 0]) {
+            // start signing reveal tx
+            let mut sighash_cache = SighashCache::new(&mut reveal_tx);
+
+            // create data to sign
+            let signature_hash = sighash_cache
+                .taproot_script_spend_signature_hash(
+                    0,
+                    &Prevouts::All(&[output_to_reveal]),
+                    TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
+                    bitcoin::sighash::TapSighashType::Default,
+                )
+                .unwrap();
+
+            // sign reveal tx data
+            let signature = secp256k1.sign_schnorr(
+                &secp256k1::Message::from_slice(signature_hash.as_byte_array())
+                    .expect("should be cryptographically secure hash"),
+                &key_pair,
+            );
+
+            // add signature to witness and finalize reveal tx
+            let witness = sighash_cache.witness_mut(0).unwrap();
+            witness.push(signature.as_ref());
+            witness.push(reveal_script);
+            witness.push(&control_block.serialize());
+
+            // check if inscription locked to the correct address
+            let recovery_key_pair =
+                key_pair.tap_tweak(&secp256k1, taproot_spend_info.merkle_root());
+            let (x_only_pub_key, _parity) = recovery_key_pair.to_inner().x_only_public_key();
+            assert_eq!(
+                Address::p2tr_tweaked(
+                    TweakedPublicKey::dangerous_assume_tweaked(x_only_pub_key),
+                    network,
+                ),
+                commit_tx_address
+            );
+
+            return Ok((unsigned_commit_tx, reveal_tx));
+        }
+
+        random += 1;
+    }
 }
 
 pub fn write_reveal_tx(tx: &[u8], tx_id: String) {

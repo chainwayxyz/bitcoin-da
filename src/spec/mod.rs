@@ -1,10 +1,11 @@
+use bitcoin::Transaction;
 use sov_rollup_interface::da::DaSpec;
 
 use self::blob::BlobWithSender;
 use self::block_hash::BlockHashWrapper;
 use self::header::HeaderWrapper;
 use self::proof::InclusionMultiProof;
-use self::transaction::ExtendedTransaction;
+
 use crate::verifier::ChainValidityCondition;
 
 pub mod address;
@@ -35,7 +36,7 @@ impl DaSpec for BitcoinSpec {
     type InclusionMultiProof = InclusionMultiProof;
 
     // Issue: https://github.com/chainwayxyz/bitcoin-da/issues/2
-    type CompletenessProof = Vec<ExtendedTransaction>;
+    type CompletenessProof = Vec<Transaction>;
 
     type ValidityCondition = ChainValidityCondition;
 }
