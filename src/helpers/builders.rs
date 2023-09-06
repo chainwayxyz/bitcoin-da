@@ -21,6 +21,7 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
 use bitcoin::{
     Address, Amount, Network, OutPoint, Script, Sequence, Transaction, TxIn, TxOut, Witness,
 };
+use brotli::{CompressorWriter, DecompressorWriter};
 use ord::{FeeRate, SatPoint, TransactionBuilder};
 
 use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
@@ -29,6 +30,18 @@ use crate::spec::utxo::UTXO;
 pub fn get_satpoint_to_inscribe(utxo: &UTXO) -> SatPoint {
     let satpoint_str = utxo.tx_id.to_string() + ":" + &utxo.vout.to_string() + ":0"; // first offset
     SatPoint::from_str(&satpoint_str).unwrap()
+}
+
+pub fn compress_blob(blob: &[u8]) -> Vec<u8> {
+    let mut writer = CompressorWriter::new(Vec::new(), 4096, 11, 22);
+    writer.write_all(blob).unwrap();
+    writer.into_inner()
+}
+
+pub fn decompress_blob(blob: &[u8]) -> Vec<u8> {
+    let mut writer = DecompressorWriter::new(Vec::new(), 4096);
+    writer.write_all(blob).unwrap();
+    writer.into_inner().expect("decompression failed")
 }
 
 // Signs a message with a private key
