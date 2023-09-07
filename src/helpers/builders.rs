@@ -21,6 +21,7 @@ use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
 use bitcoin::{
     Address, Amount, Network, OutPoint, Script, Sequence, Transaction, TxIn, TxOut, Witness,
 };
+use brotli::{CompressorWriter, DecompressorWriter};
 use ord::{FeeRate, SatPoint, TransactionBuilder};
 
 use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
@@ -29,6 +30,18 @@ use crate::spec::utxo::UTXO;
 pub fn get_satpoint_to_inscribe(utxo: &UTXO) -> SatPoint {
     let satpoint_str = utxo.tx_id.to_string() + ":" + &utxo.vout.to_string() + ":0"; // first offset
     SatPoint::from_str(&satpoint_str).unwrap()
+}
+
+pub fn compress_blob(blob: &[u8]) -> Vec<u8> {
+    let mut writer = CompressorWriter::new(Vec::new(), 4096, 11, 22);
+    writer.write_all(blob).unwrap();
+    writer.into_inner()
+}
+
+pub fn decompress_blob(blob: &[u8]) -> Vec<u8> {
+    let mut writer = DecompressorWriter::new(Vec::new(), 4096);
+    writer.write_all(blob).unwrap();
+    writer.into_inner().expect("decompression failed")
 }
 
 // Signs a message with a private key
@@ -276,4 +289,34 @@ pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
     let reveal_tx_file = File::create("reveal_".to_string() + &tx_id + ".tx").unwrap();
     let mut reveal_tx_writer = BufWriter::new(reveal_tx_file);
     reveal_tx_writer.write_all(tx).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::helpers::builders::{compress_blob, decompress_blob};
+
+    #[test]
+    fn compression_decompression() {
+        let blob = std::fs::read("test_data/blob.txt").unwrap();
+
+        // compress and measure time
+        let time = std::time::Instant::now();
+        let compressed_blob = compress_blob(&blob);
+        println!("compression time: {:?}", time.elapsed());
+
+        // decompress and measure time
+        let time = std::time::Instant::now();
+        let decompressed_blob = decompress_blob(&compressed_blob);
+        println!("decompression time: {:?}", time.elapsed());
+
+        assert_eq!(blob, decompressed_blob);
+
+        // size
+        println!("blob size: {}", blob.len());
+        println!("compressed blob size: {}", compressed_blob.len());
+        println!(
+            "compression ratio: {}",
+            (blob.len() as f64) / (compressed_blob.len() as f64)
+        );
+    }
 }

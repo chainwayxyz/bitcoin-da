@@ -14,7 +14,7 @@ use tracing::info;
 
 use crate::helpers::builders::{
     create_inscription_transactions, get_satpoint_to_inscribe, sign_blob_with_private_key,
-    write_reveal_tx,
+    write_reveal_tx, compress_blob, decompress_blob,
 };
 use crate::helpers::parsers::parse_transaction;
 use crate::rpc::{BitcoinNode, RPCError};
@@ -185,11 +185,11 @@ impl DaService for BitcoinService {
             if let Ok(inscription) = parsed_inscription {
                 let blob = inscription.body;
 
-                // TODO: Decompress the blob after implementing compression
-                // Issue: https://github.com/chainwayxyz/bitcoin-da/issues/4
+                // Decompress the blob
+                let decompressed_blob = decompress_blob(&blob);
 
                 let relevant_tx = BlobWithSender::new(
-                    blob,
+                    decompressed_blob,
                     AddressWrapper(tx.sender.clone()),
                     tx.transaction.txid().to_raw_hash().to_byte_array(),
                 );
@@ -266,8 +266,8 @@ impl DaService for BitcoinService {
         let rollup_name = self.rollup_name.clone();
         let sequencer_da_private_key = self.sequencer_da_private_key.clone();
 
-        // TODO: Pick a compression algorithm and compress the blob
-        // Issue: https://github.com/chainwayxyz/bitcoin-da/issues/4
+        // Compress the blob
+        let blob = compress_blob(&blob);
 
         // get two change addresses that are necessary for the inscribe transaction
         let change_addresses: [Address; 2] = client.get_change_addresses().await?;
@@ -404,7 +404,7 @@ mod tests {
         let da_service = get_service().await;
 
         let block = da_service
-            .get_block_at(132)
+            .get_block_at(142)
             .await
             .expect("Failed to get block");
 
