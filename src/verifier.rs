@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bitcoin::hashes::Hash;
 use bitcoin::{merkle_tree, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -74,6 +76,7 @@ impl DaVerifier for BitcoinVerifier {
         inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
         completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
+
         let validity_condition = ChainValidityCondition {
             prev_hash: block_header
                 .header
@@ -87,9 +90,42 @@ impl DaVerifier for BitcoinVerifier {
                 .to_byte_array(),
         };
 
-        if txs.is_empty() {
-            return Ok(validity_condition);
-        }
+        // completeness proof
+
+        // create hash set of txs
+        let mut txs_to_check = txs
+            .iter()
+            .map(|blob| blob.hash)
+            .collect::<HashSet<_>>();
+
+        // Check every 00 bytes tx that parsed correctly is in txs
+        let completeness_tx_hashes = completeness_proof.iter().map(|tx| {
+            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
+
+            // it must parsed correctly
+            let parsed_tx = parse_transaction(tx, &self.rollup_name);
+            if parsed_tx.is_ok() {
+                // it must be in txs
+                assert!(txs_to_check.contains(&tx_hash));
+
+                // remove tx from txs_to_check
+                txs_to_check.remove(&tx_hash);
+            }
+
+            tx_hash
+        })
+        .collect::<HashSet<_>>();
+        
+
+        // assert no extra txs than the ones in the completeness proof are left
+        assert!(txs_to_check.is_empty());
+
+        // no 00 bytes left behind completeness proof
+        inclusion_proof.txs.iter().for_each(|tx_hash| {
+            if tx_hash[0..2] == [0, 0] {
+                assert!(completeness_tx_hashes.contains(tx_hash));
+            }
+        });
 
         let tx_root = block_header
             .header
@@ -109,43 +145,13 @@ impl DaVerifier for BitcoinVerifier {
             .to_raw_hash()
             .to_byte_array();
 
+        // Check that the tx root in the block header matches the tx root in the inclusion proof.
+        assert_eq!(root_from_inclusion, tx_root);
+
+        // Check that all txs supplied are in the current block.
         txs.iter().for_each(|tx| {
             assert!(inclusion_proof.txs.contains(&tx.hash));
         });
-
-        assert_eq!(root_from_inclusion, tx_root);
-
-        // completeness proof
-        // completeness proof
-        // iterate over completeness proof txs
-        // every tx must have two leading zeros in the hash
-        // every tx parsed correctly must be in txs
-
-        // create hash set of txs
-        let mut txs_to_check = txs
-            .iter()
-            .map(|blob| blob.hash)
-            .collect::<std::collections::HashSet<_>>();
-
-        completeness_proof.iter().for_each(|tx| {
-            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
-
-            // it must have two leading zeros in the hash
-            assert_eq!(tx_hash[0..2], [0, 0]);
-
-            // it must parsed correctly
-            let parsed_tx = parse_transaction(tx, &self.rollup_name);
-            if parsed_tx.is_ok() {
-                // it must be in txs
-                assert!(txs_to_check.contains(&tx_hash));
-
-                // remove tx from txs_to_check
-                txs_to_check.remove(&tx_hash);
-            }
-        });
-
-        // txs_to_check must be empty
-        assert!(txs_to_check.is_empty());
 
         Ok(validity_condition)
     }
