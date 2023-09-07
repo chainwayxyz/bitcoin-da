@@ -50,23 +50,27 @@ pub struct BlobWithSender {
 }
 
 impl BlobReaderTrait for BlobWithSender {
-    type Data = BlobBuf;
-
     type Address = AddressWrapper;
 
     fn sender(&self) -> Self::Address {
         self.sender.clone()
     }
 
-    fn data(&self) -> &sov_rollup_interface::da::CountedBufReader<Self::Data> {
-        &self.blob
-    }
-
-    fn data_mut(&mut self) -> &mut sov_rollup_interface::da::CountedBufReader<Self::Data> {
-        &mut self.blob
-    }
-
     fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    fn verified_data(&self) -> &[u8] {
+        self.blob.accumulator()
+    }
+
+    fn total_len(&self) -> usize {
+        self.blob.total_len()
+    }
+
+    #[cfg(feature = "native")]
+    fn advance(&mut self, num_bytes: usize) -> &[u8] {
+        self.blob.advance(num_bytes);
+        self.verified_data()
     }
 }

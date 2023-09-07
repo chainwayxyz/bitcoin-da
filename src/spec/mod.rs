@@ -1,6 +1,7 @@
 use bitcoin::Transaction;
 use sov_rollup_interface::da::DaSpec;
 
+use self::address::AddressWrapper;
 use self::blob::BlobWithSender;
 use self::block_hash::BlockHashWrapper;
 use self::header::HeaderWrapper;
@@ -32,10 +33,10 @@ impl DaSpec for BitcoinSpec {
 
     type BlobTransaction = BlobWithSender;
 
-    // InclusionMultiProof is vector of transaction hashes
+    type Address = AddressWrapper;
+
     type InclusionMultiProof = InclusionMultiProof;
 
-    // Issue: https://github.com/chainwayxyz/bitcoin-da/issues/2
     type CompletenessProof = Vec<Transaction>;
 
     type ValidityCondition = ChainValidityCondition;
