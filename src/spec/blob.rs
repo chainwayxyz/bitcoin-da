@@ -13,14 +13,14 @@ pub struct BlobBuf {
 }
 
 impl BlobWithSender {
-    pub fn new(blob: Vec<u8>, sender: AddressWrapper, hash: [u8; 32]) -> Self {
+    pub fn new(blob: Vec<u8>, sender: Option<Vec<u8>>, hash: Option<[u8; 32]>) -> Self {
         Self {
             blob: CountedBufReader::new(BlobBuf {
                 data: blob,
                 offset: 0,
             }),
-            sender,
-            hash,
+            sender: AddressWrapper(sender.unwrap_or(Vec::new())),
+            hash: hash.unwrap_or([0; 32]),
         }
     }
 }
@@ -42,7 +42,7 @@ impl Buf for BlobBuf {
 // BlobWithSender is a wrapper around BlobBuf to implement BlobReaderTrait
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlobWithSender {
-    pub hash: [u8; 32], // txid is used as hash
+    pub hash: [u8; 32],
 
     pub sender: AddressWrapper,
 
