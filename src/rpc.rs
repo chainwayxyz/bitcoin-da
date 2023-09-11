@@ -1,7 +1,6 @@
 use core::fmt::Display;
 use core::str::FromStr;
 
-use anyhow::Ok;
 use bitcoin::block::{Header, Version};
 use bitcoin::consensus::Decodable;
 use bitcoin::hash_types::TxMerkleNode;
@@ -11,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, to_value};
 
-use crate::helpers::parsers::recover_sequencer_from_tx;
+use crate::helpers::parsers::recover_sender_and_hash_from_tx;
 use crate::spec::block::BitcoinBlock;
 use crate::spec::header::HeaderWrapper;
 use crate::spec::transaction::ExtendedTransaction;
@@ -156,13 +155,20 @@ impl BitcoinNode {
                 let transaction =
                     Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..]).unwrap();
 
-                let sender =
-                    recover_sequencer_from_tx(&transaction, rollup_name).unwrap_or(Vec::new());
-
-                ExtendedTransaction {
-                    transaction,
-                    sender,
-                }
+                let extended_tx = match recover_sender_and_hash_from_tx(&transaction, rollup_name) {
+                    Ok((sender, blob_hash)) => ExtendedTransaction {
+                        transaction,
+                        sender: Some(sender),
+                        blob_hash: Some(blob_hash),
+                    },
+                    Err(_) => ExtendedTransaction {
+                            transaction,
+                            sender: None,
+                            blob_hash: None,
+                        }
+                };
+                
+                extended_tx
             })
             .collect();
 
