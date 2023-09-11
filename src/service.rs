@@ -431,10 +431,7 @@ mod tests {
                 let blob = parsed_tx.unwrap().body;
                 let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
                 // it must be in txs
-                assert!(txs_to_check.contains(&blob_hash));
-
-                // remove tx from txs_to_check
-                txs_to_check.remove(&blob_hash);
+                assert!(txs_to_check.remove(&blob_hash));
             }
 
             tx_hash
@@ -448,8 +445,7 @@ mod tests {
         // no 00 bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
             if tx_hash[0..2] == [0, 0] {
-                assert!(completeness_tx_hashes.contains(tx_hash));
-                completeness_tx_hashes.remove(tx_hash);
+                assert!(completeness_tx_hashes.remove(tx_hash));
             }
         });
 
@@ -479,7 +475,7 @@ mod tests {
 
         // Check that the tx root in the block header matches the tx root in the inclusion proof.
         assert_eq!(root_from_inclusion, tx_root);
-        
+
         println!("\n--- Inclusion proof verified ---\n");
 
         println!("\n--- Extracted #{:?} txs ---\n", txs.len());

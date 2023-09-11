@@ -108,10 +108,7 @@ impl DaVerifier for BitcoinVerifier {
                 let blob = parsed_tx.unwrap().body;
                 let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
                 // it must be in txs
-                assert!(txs_to_check.contains(&blob_hash));
-
-                // remove tx from txs_to_check
-                txs_to_check.remove(&blob_hash);
+                assert!(txs_to_check.remove(&blob_hash));
             }
 
             tx_hash
@@ -125,8 +122,7 @@ impl DaVerifier for BitcoinVerifier {
         // no 00 bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
             if tx_hash[0..2] == [0, 0] {
-                assert!(completeness_tx_hashes.contains(tx_hash));
-                completeness_tx_hashes.remove(tx_hash);
+                assert!(completeness_tx_hashes.remove(tx_hash));
             }
         });
 
