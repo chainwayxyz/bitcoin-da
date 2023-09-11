@@ -126,7 +126,7 @@ fn parse_relevant_inscriptions(
 }
 
 // Recovers the sequencer public key from the transaction
-pub fn recover_sequencer_from_tx(tx: &Transaction, rollup_name: &str) -> Result<Vec<u8>, ()> {
+pub fn recover_sender_and_hash_from_tx(tx: &Transaction, rollup_name: &str) -> Result<(Vec<u8>, [u8; 32]), ()> {
     let script = get_script(tx)?;
     let mut instructions = script.instructions().peekable();
     let parsed_inscription = parse_relevant_inscriptions(&mut instructions, rollup_name)?;
@@ -140,7 +140,7 @@ pub fn recover_sequencer_from_tx(tx: &Transaction, rollup_name: &str) -> Result<
     let verified = secp.verify_ecdsa(&message, &signature, &public_key).is_ok();
 
     if verified {
-        Ok(public_key.serialize().to_vec())
+        Ok((public_key.serialize().to_vec(), *message.as_ref()))
     } else {
         Err(())
     }

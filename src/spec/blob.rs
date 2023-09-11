@@ -42,7 +42,7 @@ impl Buf for BlobBuf {
 // BlobWithSender is a wrapper around BlobBuf to implement BlobReaderTrait
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BlobWithSender {
-    pub hash: [u8; 32], // txid is used as hash
+    pub hash: [u8; 32],
 
     pub sender: AddressWrapper,
 
