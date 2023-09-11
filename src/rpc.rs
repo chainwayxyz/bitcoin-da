@@ -1,7 +1,6 @@
 use core::fmt::Display;
 use core::str::FromStr;
 
-use anyhow::Ok;
 use bitcoin::block::{Header, Version};
 use bitcoin::consensus::Decodable;
 use bitcoin::hash_types::TxMerkleNode;
@@ -156,14 +155,20 @@ impl BitcoinNode {
                 let transaction =
                     Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..]).unwrap();
 
-                let (sender, blob_hash) =
-                    recover_sender_and_hash_from_tx(&transaction, rollup_name).unwrap_or((Vec::new(), [0; 32]));
-
-                ExtendedTransaction {
-                    transaction,
-                    sender,
-                    blob_hash,
-                }
+                let extended_tx = match recover_sender_and_hash_from_tx(&transaction, rollup_name) {
+                    Ok((sender, blob_hash)) => ExtendedTransaction {
+                        transaction,
+                        sender: Some(sender),
+                        blob_hash: Some(blob_hash),
+                    },
+                    Err(_) => ExtendedTransaction {
+                            transaction,
+                            sender: None,
+                            blob_hash: None,
+                        }
+                };
+                
+                extended_tx
             })
             .collect();
 

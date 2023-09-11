@@ -190,7 +190,7 @@ impl DaService for BitcoinService {
 
                 let relevant_tx = BlobWithSender::new(
                     decompressed_blob,
-                    AddressWrapper(tx.sender.clone()),
+                    tx.sender.clone(),
                     tx.blob_hash,
                 );
 
