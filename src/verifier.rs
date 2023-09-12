@@ -86,12 +86,24 @@ impl BitcoinVerifier {
             .map(|blob| blob.hash)
             .collect::<HashSet<_>>();
 
+        let mut start_index = 0;
         // Check every 00 bytes tx that parsed correctly is in txs
-        let mut completeness_tx_hashes = completeness_proof.iter().map(|tx| {
+        let mut completeness_tx_hashes = completeness_proof.iter().enumerate().map(|(index_completeness, tx)| {
             let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
             // makse sure it is 00 bytes
             assert!(tx_hash[0..2] == [0, 0]);
+
+            // make sure order in DA is preserved
+            let mut new_index: Option<usize> = None;
+            for i in start_index..inclusion_proof.txs.len() {
+                if inclusion_proof.txs[i] == tx_hash {
+                    new_index = Some(i);
+                }
+            }
+
+            assert!(new_index.is_some());
+            start_index = new_index.unwrap() + 1;
 
             // it must parsed correctly
             let parsed_tx = parse_transaction(tx, &self.rollup_name);
@@ -100,6 +112,12 @@ impl BitcoinVerifier {
                 let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
                 // it must be in txs
                 assert!(txs_to_check.remove(&blob_hash));
+
+                // txs order is preserved
+                assert!(txs[index_completeness].hash == blob_hash);
+
+                // TODO: should check for block content as hash and blob are given seperately
+                // so blob can be tampered with
             }
 
             tx_hash
@@ -174,7 +192,7 @@ mod tests {
     use core::str::FromStr;
     use hex;
     use bitcoin::{block::{Header, Version}, BlockHash, hash_types::TxMerkleNode, CompactTarget, string::FromHexStr, Transaction, consensus::Decodable, hashes::Hash};
-    use sov_rollup_interface::{da::{DaVerifier, DaSpec}, digest::FixedOutput};
+    use sov_rollup_interface::da::{DaVerifier, DaSpec};
 
     use crate::{spec::{header::HeaderWrapper, blob::BlobWithSender, proof::InclusionMultiProof, transaction::ExtendedTransaction}, helpers::{parsers::{parse_transaction, recover_sender_and_hash_from_tx}, builders::decompress_blob}};
 
@@ -218,11 +236,6 @@ mod tests {
         <<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::CompletenessProof, // completeness proof
         Vec<<<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::BlobTransaction> // txs
     ) {
-
-        // let secp = Secp256k1::new();
-        // let key = SecretKey::from_str("E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262").unwrap();
-        // let public_key = PublicKey::from_secret_key(&secp, &key);
-
         let header = HeaderWrapper {
             header: Header {
                 version: Version::from_consensus(536870912),
@@ -262,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn test_correct () {
+    fn correct () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -282,8 +295,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_extra_tx_in_inclusion() {
+    #[should_panic(expected = "assertion failed")]
+    fn extra_tx_in_inclusion () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -301,8 +314,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_missing_tx_in_inclusion() {
+    #[should_panic(expected = "assertion failed")]
+    fn missing_tx_in_inclusion () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -320,8 +333,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_empty_inclusion() {
+    #[should_panic(expected = "assertion failed")]
+    fn empty_inclusion () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -339,8 +352,27 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_missing_tx_in_completeness_proof () {
+    #[should_panic(expected = "assertion failed")]
+    fn break_order_of_inclusion () {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string()
+        };
+
+        let (
+            block_header,
+            mut inclusion_proof,
+            completeness_proof,
+            txs
+        ) = get_mock_data();
+
+        inclusion_proof.txs.swap(0, 1);
+
+        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn missing_tx_in_completeness_proof () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -358,8 +390,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_empty_completeness_proof () {
+    #[should_panic(expected = "assertion failed")]
+    fn empty_completeness_proof () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -377,8 +409,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_non_relevant_tx_in_completeness_proof () {
+    #[should_panic(expected = "assertion failed")]
+    fn non_relevant_tx_in_completeness_proof () {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string()
         };
@@ -390,9 +422,95 @@ mod tests {
             txs
         ) = get_mock_data();
 
-        completeness_proof[1] = get_mock_txs().get(1).unwrap().clone();
+        completeness_proof.push(get_mock_txs().get(1).unwrap().clone());
 
         verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
     }
 
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn break_completeness_proof_order () {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string()
+        };
+
+        let (
+            block_header,
+            inclusion_proof,
+            mut completeness_proof,
+            txs
+        ) = get_mock_data();
+
+        completeness_proof.swap(2, 3);
+
+        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn break_rel_tx_order () {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string()
+        };
+
+        let (
+            block_header,
+            inclusion_proof,
+            completeness_proof,
+            mut txs
+        ) = get_mock_data();
+
+        txs.swap(0, 1);
+
+        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    }
+
+    #[test]
+    #[should_panic]
+    fn break_rel_tx_and_completeness_proof_order () {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string()
+        };
+
+        let (
+            block_header,
+            inclusion_proof,
+            mut completeness_proof,
+            mut txs
+        ) = get_mock_data();
+
+        txs.swap(0, 1);
+        completeness_proof.swap(0, 1);
+
+
+        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    }
+
+    // #[test]
+    // #[should_panic(expected = "assertion failed")]
+    // fn tamper_rel_tx_content () {
+    //     let verifier = BitcoinVerifier {
+    //         rollup_name: "sov-btc".to_string()
+    //     };
+
+    //     let (
+    //         block_header,
+    //         inclusion_proof,
+    //         completeness_proof,
+    //         mut txs
+    //     ) = get_mock_data();
+
+    //     let mut new_blob = vec![2; 152];
+
+    //     new_blob.swap(2, 3);
+
+    //     txs[1] = BlobWithSender::new(
+    //         new_blob,
+    //         Some(txs[1].sender.0.clone()),
+    //         Some(txs[1].hash)
+    //     );
+
+
+    //     verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    // }
 }
