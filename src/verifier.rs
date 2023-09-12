@@ -57,14 +57,25 @@ impl ValidityCondition for ChainValidityCondition {
     }
 }
 
-impl BitcoinVerifier {
-    fn verify(
+impl DaVerifier for BitcoinVerifier {
+    type Spec = BitcoinSpec;
+
+    type Error = ValidationError;
+
+    fn new(params: <Self::Spec as DaSpec>::ChainParams) -> Self {
+        Self {
+            rollup_name: params.rollup_name,
+        }
+    }
+
+    // Verify that the given list of blob transactions is complete and correct.
+    fn verify_relevant_tx_list<H: Digest>(
         &self,
-        block_header: &<<BitcoinVerifier as DaVerifier>::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
-        txs: &[<<BitcoinVerifier as DaVerifier>::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
-        inclusion_proof: <<BitcoinVerifier as DaVerifier>::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
-        completeness_proof: <<BitcoinVerifier as DaVerifier>::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
-    ) -> Result<<<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::ValidityCondition, <BitcoinVerifier as DaVerifier>::Error> {
+        block_header: &<Self::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
+        txs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
+        inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
+        completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
+    ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
         let validity_condition = ChainValidityCondition {
             prev_hash: block_header
                 .header
@@ -86,24 +97,28 @@ impl BitcoinVerifier {
             .map(|blob| blob.hash)
             .collect::<HashSet<_>>();
 
-        let mut start_index = 0;
+        let mut prev_index_in_inclusion = 0;
+
         // Check every 00 bytes tx that parsed correctly is in txs
         let mut completeness_tx_hashes = completeness_proof.iter().enumerate().map(|(index_completeness, tx)| {
             let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
-            // makse sure it is 00 bytes
+            // make sure it is 00 bytes
             assert!(tx_hash[0..2] == [0, 0]);
 
-            // make sure order in DA is preserved
-            let mut new_index: Option<usize> = None;
-            for i in start_index..inclusion_proof.txs.len() {
+            // make sure completeness txs are ordered same in inclusion proof
+            // this logic always start seaching from the last found index
+            // ordering should be preserved naturally
+            let mut is_found_in_block = false;
+            for i in prev_index_in_inclusion..inclusion_proof.txs.len() {
                 if inclusion_proof.txs[i] == tx_hash {
-                    new_index = Some(i);
+                    is_found_in_block = true;
+                    prev_index_in_inclusion = i + 1;
+                    break;
                 }
             }
-
-            assert!(new_index.is_some());
-            start_index = new_index.unwrap() + 1;
+            // assert tx is included in inclusion proof, thus in block
+            assert!(is_found_in_block);
 
             // it must parsed correctly
             let parsed_tx = parse_transaction(tx, &self.rollup_name);
@@ -113,7 +128,7 @@ impl BitcoinVerifier {
                 // it must be in txs
                 assert!(txs_to_check.remove(&blob_hash));
 
-                // txs order is preserved
+                // asserting txs order is preserved
                 assert!(txs[index_completeness].hash == blob_hash);
 
                 // TODO: should check for block content as hash and blob are given seperately
@@ -123,7 +138,6 @@ impl BitcoinVerifier {
             tx_hash
         })
         .collect::<HashSet<_>>();
-        
 
         // assert no extra txs than the ones in the completeness proof are left
         assert!(txs_to_check.is_empty());
@@ -131,7 +145,9 @@ impl BitcoinVerifier {
         // no 00 bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
             if tx_hash[0..2] == [0, 0] {
-                assert!(completeness_tx_hashes.remove(tx_hash));
+                // we don't need to assert
+                // we checked inclusion while checking ordering
+                completeness_tx_hashes.remove(tx_hash);
             }
         });
 
@@ -163,36 +179,13 @@ impl BitcoinVerifier {
     }
 }
 
-impl DaVerifier for BitcoinVerifier {
-    type Spec = BitcoinSpec;
-
-    type Error = ValidationError;
-
-    fn new(params: <Self::Spec as DaSpec>::ChainParams) -> Self {
-        Self {
-            rollup_name: params.rollup_name,
-        }
-    }
-
-    // Verify that the given list of blob transactions is complete and correct.
-    fn verify_relevant_tx_list<H: Digest>(
-        &self,
-        block_header: &<Self::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
-        txs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
-        inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
-        completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
-    ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
-        self.verify(block_header, txs, inclusion_proof, completeness_proof)
-    }
-}
-
 #[cfg(test)]
 mod tests {
 
     use core::str::FromStr;
     use hex;
     use bitcoin::{block::{Header, Version}, BlockHash, hash_types::TxMerkleNode, CompactTarget, string::FromHexStr, Transaction, consensus::Decodable, hashes::Hash};
-    use sov_rollup_interface::da::{DaVerifier, DaSpec};
+    use sov_rollup_interface::{da::{DaVerifier, DaSpec}, crypto::NoOpHasher};
 
     use crate::{spec::{header::HeaderWrapper, blob::BlobWithSender, proof::InclusionMultiProof, transaction::ExtendedTransaction}, helpers::{parsers::{parse_transaction, recover_sender_and_hash_from_tx}, builders::decompress_blob}};
 
@@ -287,7 +280,7 @@ mod tests {
             txs
         ) = get_mock_data();
 
-        assert!(verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).is_ok());
+        assert!(verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).is_ok());
         // Empty inclusion proof
 
         // Break order of txs
@@ -310,7 +303,7 @@ mod tests {
 
         inclusion_proof.txs.push([1; 32]);
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -329,7 +322,7 @@ mod tests {
 
         inclusion_proof.txs.pop();
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -348,7 +341,7 @@ mod tests {
 
         inclusion_proof.txs.clear();
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -367,7 +360,7 @@ mod tests {
 
         inclusion_proof.txs.swap(0, 1);
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -386,7 +379,7 @@ mod tests {
 
         completeness_proof.pop();
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -405,7 +398,7 @@ mod tests {
 
         completeness_proof.clear();
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -424,7 +417,7 @@ mod tests {
 
         completeness_proof.push(get_mock_txs().get(1).unwrap().clone());
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -443,7 +436,7 @@ mod tests {
 
         completeness_proof.swap(2, 3);
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -462,7 +455,7 @@ mod tests {
 
         txs.swap(0, 1);
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -483,7 +476,7 @@ mod tests {
         completeness_proof.swap(0, 1);
 
 
-        verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     // #[test]
@@ -511,6 +504,6 @@ mod tests {
     //     );
 
 
-    //     verifier.verify(&block_header, txs.as_slice(), inclusion_proof, completeness_proof);
+    //     verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     // }
 }
