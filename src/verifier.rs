@@ -145,13 +145,11 @@ impl DaVerifier for BitcoinVerifier {
         // no 00 bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
             if tx_hash[0..2] == [0, 0] {
-                // we don't need to assert
-                // we checked inclusion while checking ordering
-                completeness_tx_hashes.remove(tx_hash);
+                assert!(completeness_tx_hashes.remove(tx_hash));
             }
         });
 
-        // assert all transactions are included in block
+        // assert all 00 transactions are included in completeness proof
         assert!(completeness_tx_hashes.is_empty());   
 
         let tx_root = block_header
