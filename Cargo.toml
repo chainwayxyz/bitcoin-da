@@ -36,4 +36,4 @@ brotli = "3.3.4"
 default = ["native"]
 native = ["dep:tokio", "dep:reqwest", "sov-rollup-interface/native"]
 serde = []
-verifier = []
+verifier = ["native"]

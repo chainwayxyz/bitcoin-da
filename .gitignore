@@ -1,4 +1,10 @@
 /target
 Cargo.lock
 .DS_Store
+
+# reveal tx logs
 reveal_*.tx
+
+# coverage report
+tarpaulin-report.html
+build_rs_cov.profraw
