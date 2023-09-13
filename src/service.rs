@@ -24,6 +24,7 @@ use crate::spec::block::BitcoinBlock;
 use crate::spec::proof::InclusionMultiProof;
 use crate::spec::utxo::UTXO;
 use crate::spec::{BitcoinSpec, RollupParams};
+use crate::verifier::BitcoinVerifier;
 
 /// A service that provides data and data availability proofs for Bitcoin
 #[derive(Debug, Clone)]
@@ -99,6 +100,8 @@ impl BitcoinService {
 #[async_trait]
 impl DaService for BitcoinService {
     type Spec = BitcoinSpec;
+
+    type Verifier = BitcoinVerifier;
 
     type FilteredBlock = BitcoinBlock;
 

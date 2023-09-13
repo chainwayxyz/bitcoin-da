@@ -70,7 +70,7 @@ impl DaVerifier for BitcoinVerifier {
     }
 
     // Verify that the given list of blob transactions is complete and correct.
-    fn verify_relevant_tx_list<H: Digest>(
+    fn verify_relevant_tx_list(
         &self,
         block_header: &<Self::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
         txs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
@@ -288,7 +288,7 @@ mod tests {
             txs
         ) = get_mock_data();
 
-        assert!(verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).is_ok());
+        assert!(verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).is_ok());
     }
 
     #[test]
@@ -307,7 +307,7 @@ mod tests {
 
         inclusion_proof.txs.push([1; 32]);
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
 
         inclusion_proof.txs.pop();
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod tests {
 
         inclusion_proof.txs.clear();
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -364,7 +364,7 @@ mod tests {
 
         inclusion_proof.txs.swap(0, 1);
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -383,7 +383,7 @@ mod tests {
 
         completeness_proof.pop();
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
 
         completeness_proof.clear();
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -421,7 +421,7 @@ mod tests {
 
         completeness_proof.push(get_mock_txs().get(1).unwrap().clone());
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -440,7 +440,7 @@ mod tests {
 
         completeness_proof.swap(2, 3);
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
 
         txs.swap(0, 1);
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -480,7 +480,7 @@ mod tests {
         completeness_proof.swap(0, 1);
 
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 
     #[test]
@@ -505,6 +505,6 @@ mod tests {
             Some(txs[1].hash)
         );
 
-        verifier.verify_relevant_tx_list::<NoOpHasher>(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
+        verifier.verify_relevant_tx_list(&block_header, txs.as_slice(), inclusion_proof, completeness_proof).unwrap();
     }
 }
