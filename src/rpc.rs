@@ -172,10 +172,13 @@ impl BitcoinNode {
             })
             .collect();
 
+        let height = full_block.get("height").unwrap().as_u64().unwrap();
+
         Ok(BitcoinBlock {
             header: HeaderWrapper {
                 header,
                 tx_count: txs.len() as u32,
+                height,
             },
             txdata: txs,
         })

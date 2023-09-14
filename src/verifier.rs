@@ -248,6 +248,7 @@ mod tests {
                 nonce: 0,
             },
             tx_count: 13,
+            height: 2,
         };
 
         let block_txs = get_mock_txs();

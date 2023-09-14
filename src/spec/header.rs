@@ -9,6 +9,7 @@ use super::block_hash::BlockHashWrapper;
 pub struct HeaderWrapper {
     pub header: Header,
     pub tx_count: u32,
+    pub height: u64,
 }
 
 impl BlockHeaderTrait for HeaderWrapper {
@@ -21,4 +22,13 @@ impl BlockHeaderTrait for HeaderWrapper {
     fn hash(&self) -> Self::Hash {
         BlockHashWrapper(self.header.block_hash())
     }
+
+    fn height(&self) -> u64 {
+        self.height
+    }
+
+    fn time(&self) -> sov_rollup_interface::da::Time {
+        sov_rollup_interface::da::Time::from_secs(self.header.time as i64)
+    }
+
 }
