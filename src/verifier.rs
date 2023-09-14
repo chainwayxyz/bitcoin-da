@@ -9,7 +9,7 @@ use sov_rollup_interface::digest::Digest;
 use sov_rollup_interface::zk::ValidityCondition;
 use thiserror::Error;
 
-use crate::helpers::builders::compress_blob;
+use crate::helpers::builders::{compress_blob, decompress_blob};
 use crate::helpers::parsers::parse_transaction;
 use crate::spec::BitcoinSpec;
 
@@ -133,8 +133,16 @@ impl DaVerifier for BitcoinVerifier {
                 // asserting txs order is preserved
                 assert_eq!(txs[index_completeness].hash, blob_hash, "order of transactions is not preserved");
 
-                // TODO: should check for block content as hash and blob are given seperately
-                // so blob can be tampered with
+                // decompress the blob
+                let decompressed_blob = decompress_blob(&blob);
+
+                // read the supplied blob from txs
+                let mut blob_content = txs[index_completeness].blob.clone();
+                blob_content.advance(blob_content.total_len());
+                let blob_content = blob_content.accumulator();
+
+                // assert tx content is not modified
+                assert_eq!(blob_content, decompressed_blob, "blob content was modified");
             }
 
             tx_hash
@@ -175,15 +183,6 @@ impl DaVerifier for BitcoinVerifier {
 
         // Check that the tx root in the block header matches the tx root in the inclusion proof.
         assert_eq!(root_from_inclusion, tx_root, "inclusion proof is incorrect");
-
-        for tx in txs {
-            let mut decompressed_blob = tx.blob.clone();
-            decompressed_blob.advance(decompressed_blob.total_len());
-            let decompressed_blob_content = decompressed_blob.accumulator();
-            let compressed_blob_content = compress_blob(&decompressed_blob_content);
-            let compressed_blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&compressed_blob_content).to_byte_array();
-            assert_eq!(compressed_blob_hash, tx.hash, "blob content was modified");
-        }
 
         Ok(validity_condition)
     }
