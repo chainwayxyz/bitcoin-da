@@ -145,3 +145,150 @@ pub fn recover_sender_and_hash_from_tx(tx: &Transaction, rollup_name: &str) -> R
         Err(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::{ key::XOnlyPublicKey, script::{self, PushBytesBuf}, opcodes::{all::{OP_CHECKSIG, OP_IF, OP_ENDIF}, OP_FALSE}};
+
+    use super::{BODY_TAG, ROLLUP_NAME_TAG, RANDOM_TAG, PUBLICKEY_TAG, SIGNATURE_TAG, parse_relevant_inscriptions};
+
+    #[test]
+    fn wrong_rollup_tag () {
+        let reveal_script_builder = script::Builder::new()
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("not-sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+            .push_int(0)
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
+            .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn leave_out_tags () {
+        // name
+        let reveal_script_builder = script::Builder::new()
+        .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+        .push_opcode(OP_CHECKSIG)
+        .push_opcode(OP_FALSE)
+        .push_opcode(OP_IF)
+        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+        .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+        .push_int(0)
+        .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+        .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
+        .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on no name tag.");
+
+        // signature
+        let reveal_script_builder = script::Builder::new()
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+            .push_int(0)
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
+            .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on no signature tag.");
+
+        // publickey
+        let reveal_script_builder = script::Builder::new()
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+            .push_int(0)
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
+            .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on no publickey tag.");
+
+        // body
+        let reveal_script_builder = script::Builder::new()
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+            .push_int(0)
+            .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on no body tag.");
+
+        // random
+        let reveal_script_builder = script::Builder::new()
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
+            .push_opcode(OP_ENDIF);
+
+        let reveal_script = reveal_script_builder.into_script();
+
+        let result = parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on no random tag.");
+    }
+
+}
