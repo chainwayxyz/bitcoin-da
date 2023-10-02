@@ -18,7 +18,6 @@ use crate::helpers::builders::{
 };
 use crate::helpers::parsers::parse_transaction;
 use crate::rpc::{BitcoinNode, RPCError};
-use crate::spec::address::AddressWrapper;
 use crate::spec::blob::BlobWithSender;
 use crate::spec::block::BitcoinBlock;
 use crate::spec::proof::InclusionMultiProof;
@@ -336,18 +335,21 @@ impl DaService for BitcoinService {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
     use std::collections::HashSet;
 
     use bitcoin::hashes::Hash;
-    use bitcoin::{merkle_tree, Txid};
+    use bitcoin::secp256k1::{KeyPair, SecretKey};
+    use bitcoin::{merkle_tree, Txid, Address};
     use sov_rollup_interface::services::da::DaService;
 
     use super::BitcoinService;
     use crate::helpers::parsers::parse_transaction;
+    use crate::rpc::BitcoinNode;
     use crate::service::DaServiceConfig;
     use crate::spec::RollupParams;
 
-    async fn get_service() -> BitcoinService {
+    fn get_service() -> BitcoinService {
         let runtime_config = DaServiceConfig {
             node_url: "http://localhost:38332".to_string(),
             node_username: "chainway".to_string(),
@@ -369,7 +371,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_finalized_at() {
-        let da_service = get_service().await;
+        let da_service = get_service();
 
         da_service
             .get_finalized_at(132)
@@ -379,7 +381,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_at() {
-        let da_service = get_service().await;
+        let da_service = get_service();
 
         da_service
             .get_block_at(132)
@@ -389,7 +391,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_relevant_txs() {
-        let da_service = get_service().await;
+        let da_service = get_service();
 
         let block = da_service
             .get_block_at(132)
@@ -406,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_relevant_txs_with_proof() {
-        let da_service = get_service().await;
+        let da_service = get_service();
 
         let block = da_service
             .get_block_at(142)
@@ -486,12 +488,52 @@ mod tests {
 
     #[tokio::test]
     async fn send_transaction() {
-        let da_service = get_service().await;
+        let da_service = get_service();
 
         let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
         da_service
             .send_transaction(blob.as_bytes())
             .await
             .expect("Failed to send transaction");
+    }
+
+    #[tokio::test]
+    async fn check_signature() {
+        let rpc = BitcoinNode::new(
+            "http://localhost:38332".to_string(),
+            "chainway".to_string(),
+            "topsecret".to_string(),
+            bitcoin::Network::Regtest,
+        );
+
+        // empty regtest mempool
+        rpc.generate_to_address(Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl").unwrap().require_network(bitcoin::Network::Regtest).unwrap(), 5).await.unwrap();
+
+        let da_service = get_service();
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let da_pubkey = KeyPair::from_secret_key(&secp, &SecretKey::from_str(&da_service.sequencer_da_private_key).unwrap()).public_key().serialize().to_vec();
+
+        // incorrect private key
+
+        let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
+        da_service
+            .send_transaction(blob.as_bytes())
+            .await
+            .expect("Failed to send transaction");        
+
+        let hashes = rpc.generate_to_address(Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl").unwrap().require_network(bitcoin::Network::Regtest).unwrap(), 1).await.unwrap();
+        
+        let block_hash = hashes[0];
+
+        let block = rpc.get_block(block_hash.to_string(), &da_service.rollup_name).await.unwrap();
+
+        let block = da_service
+            .get_block_at(block.header.height)
+            .await
+            .unwrap();
+
+        let txs = da_service.extract_relevant_txs(&block);
+
+        assert_eq!(txs.get(0).unwrap().sender.0, da_pubkey, "Publickey recovered incorrectly!");
     }
 }

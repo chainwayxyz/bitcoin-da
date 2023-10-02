@@ -194,7 +194,7 @@ mod tests {
     use core::str::FromStr;
     use hex;
     use bitcoin::{block::{Header, Version}, BlockHash, hash_types::TxMerkleNode, CompactTarget, string::FromHexStr, Transaction, consensus::Decodable, hashes::Hash};
-    use sov_rollup_interface::{da::{DaVerifier, DaSpec}, crypto::NoOpHasher};
+    use sov_rollup_interface::da::{DaVerifier, DaSpec};
 
     use crate::{spec::{header::HeaderWrapper, blob::BlobWithSender, proof::InclusionMultiProof, transaction::ExtendedTransaction}, helpers::{parsers::{parse_transaction, recover_sender_and_hash_from_tx}, builders::decompress_blob}};
 
