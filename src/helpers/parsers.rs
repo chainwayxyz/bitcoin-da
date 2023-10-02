@@ -148,7 +148,7 @@ pub fn recover_sender_and_hash_from_tx(tx: &Transaction, rollup_name: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use bitcoin::{ key::XOnlyPublicKey, script::{self, PushBytesBuf}, opcodes::{all::{OP_CHECKSIG, OP_IF, OP_ENDIF}, OP_FALSE}};
+    use bitcoin::{ key::XOnlyPublicKey, script::{self, PushBytesBuf}, opcodes::{all::{OP_CHECKSIG, OP_IF, OP_ENDIF}, OP_FALSE}, Transaction};
 
     use super::{BODY_TAG, ROLLUP_NAME_TAG, RANDOM_TAG, PUBLICKEY_TAG, SIGNATURE_TAG, parse_relevant_inscriptions};
 
@@ -291,4 +291,14 @@ mod tests {
         assert!(result.is_err(), "Failed to error on no random tag.");
     }
 
+    #[test]
+    fn non_parseable_tx () {
+        let hex_tx = "020000000001013a66019bfcc719ba12586a83ebbb0b3debdc945f563cd64fd44c8044e3d3a1790100000000fdffffff028fa2aa060000000017a9147ba15d4e0d8334de3a68cf3687594e2d1ee5b00d879179e0090000000016001493c93ad222e57d65438545e048822ede2d418a3d0247304402202432e6c422b93705fbc57b350ea43e4ef9441c0907988eff051eaac807fc8cf2022046c92b540b5f04f8da11febb5d2a478aed1b8bc088e769da8b78fffcae8c9a9a012103e2991b47d9c788f55379f9ef519b642d79d7dfe0e7555ec5575ee934b2dca1223f5d0c00";
+
+        let tx: Transaction = bitcoin::consensus::deserialize(&hex::decode(hex_tx).unwrap()).unwrap();
+
+        let result = super::parse_transaction(&tx, "sov-btc");
+
+        assert!(result.is_err(), "Failed to error on non-parseable tx.");
+    }
 }
