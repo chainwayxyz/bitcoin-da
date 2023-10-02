@@ -319,4 +319,18 @@ mod tests {
             (blob.len() as f64) / (compressed_blob.len() as f64)
         );
     }
+
+    #[test]
+    fn write_reveal_tx() {
+        let tx = vec![100, 100, 100];
+        let tx_id = "test_tx".to_string();
+        
+        super::write_reveal_tx(tx.as_slice(), tx_id);
+
+        let file = std::fs::read("reveal_test_tx.tx").unwrap();
+
+        assert_eq!(tx, file);
+
+        std::fs::remove_file("reveal_test_tx.tx").unwrap();
+    }
 }
