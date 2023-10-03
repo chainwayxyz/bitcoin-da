@@ -256,6 +256,7 @@ impl BitcoinNode {
             .await
     }
 
+    #[cfg(test)]
     pub async fn generate_to_address(&self, address: Address, blocks: u32) -> Result<Vec<BlockHash>, anyhow::Error> {
         if self.network == Network::Regtest {
             self.call::<Vec<BlockHash>>("generatetoaddress", vec![to_value(blocks).unwrap(), to_value(address.to_string()).unwrap()]).await
@@ -265,6 +266,7 @@ impl BitcoinNode {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use crate::rpc::BitcoinNode;
 

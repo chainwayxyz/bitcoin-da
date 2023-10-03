@@ -295,7 +295,7 @@ pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
 mod tests {
     use core::str::FromStr;
 
-    use bitcoin::{OutPoint, Txid, Address, hashes::Hash, Transaction};
+    use bitcoin::{Txid, Address, hashes::Hash};
     use ord::SatPoint;
 
     use crate::{helpers::{builders::{compress_blob, decompress_blob}, parsers::parse_transaction}, spec::utxo::UTXO};
