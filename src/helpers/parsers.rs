@@ -2,9 +2,7 @@ use core::iter::Peekable;
 
 use bitcoin::blockdata::opcodes::all::{OP_ENDIF, OP_IF};
 use bitcoin::blockdata::script::{Instruction, Instructions};
-use bitcoin::hashes::sha256d;
 use bitcoin::opcodes::OP_FALSE;
-use bitcoin::secp256k1::{self, ecdsa, Message, Secp256k1};
 use bitcoin::{Script, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -122,30 +120,6 @@ fn parse_relevant_inscriptions(
     })
 }
 
-// Recovers the sequencer public key from the transaction
-pub fn recover_sender_and_hash_from_tx(
-    tx: &Transaction,
-    rollup_name: &str,
-) -> Result<(Vec<u8>, [u8; 32]), ParserError> {
-    let script = get_script(tx)?;
-    let mut instructions = script.instructions().peekable();
-    let parsed_inscription = parse_relevant_inscriptions(&mut instructions, rollup_name)?;
-    let public_key = secp256k1::PublicKey::from_slice(&parsed_inscription.public_key).unwrap();
-    let signature = ecdsa::Signature::from_compact(&parsed_inscription.signature).unwrap();
-
-    let message = Message::from_hashed_data::<sha256d::Hash>(&parsed_inscription.body);
-
-    let secp = Secp256k1::new();
-
-    let verified = secp.verify_ecdsa(&message, &signature, &public_key).is_ok();
-
-    if verified {
-        Ok((public_key.serialize().to_vec(), *message.as_ref()))
-    } else {
-        Err(ParserError::IncorrectSignature)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bitcoin::{
@@ -166,7 +140,7 @@ mod tests {
     };
 
     #[test]
-    fn working_example() {
+    fn correct() {
         let reveal_script_builder = script::Builder::new()
             .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
             .push_opcode(OP_CHECKSIG)

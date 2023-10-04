@@ -13,14 +13,14 @@ pub struct BlobBuf {
 }
 
 impl BlobWithSender {
-    pub fn new(blob: Vec<u8>, sender: Option<Vec<u8>>, hash: Option<[u8; 32]>) -> Self {
+    pub fn new(blob: Vec<u8>, sender: Vec<u8>, hash: [u8; 32]) -> Self {
         Self {
             blob: CountedBufReader::new(BlobBuf {
                 data: blob,
                 offset: 0,
             }),
-            sender: AddressWrapper(sender.unwrap_or(Vec::new())),
-            hash: hash.unwrap_or([0; 32]),
+            sender: AddressWrapper(sender),
+            hash,
         }
     }
 }

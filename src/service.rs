@@ -4,8 +4,9 @@ use core::time::Duration;
 
 use async_trait::async_trait;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::Hash;
-use bitcoin::Address;
+use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
+use bitcoin::{secp256k1, Address};
 use hex::ToHex;
 use ord::SatPoint;
 use serde::{Deserialize, Serialize};
@@ -110,7 +111,6 @@ impl DaService for BitcoinService {
     // If no such block exists, block until one does.
     async fn get_finalized_at(&self, height: u64) -> Result<Self::FilteredBlock, Self::Error> {
         let client = self.client.clone();
-        let rollup_name = self.rollup_name.clone();
         info!("Getting finalized block at height {}", height);
         loop {
             let block_count = client.get_block_count().await?;
@@ -125,7 +125,7 @@ impl DaService for BitcoinService {
         }
 
         let block_hash = client.get_block_hash(height).await?;
-        let block: BitcoinBlock = client.get_block(block_hash, &rollup_name).await?;
+        let block: BitcoinBlock = client.get_block(block_hash).await?;
 
         Ok(block)
     }
@@ -134,7 +134,6 @@ impl DaService for BitcoinService {
     // If no such block exists, block until one does.
     async fn get_block_at(&self, height: u64) -> Result<Self::FilteredBlock, Self::Error> {
         let client = self.client.clone();
-        let rollup_name = self.rollup_name.clone();
         info!("Getting block at height {}", height);
 
         let block_hash;
@@ -162,7 +161,7 @@ impl DaService for BitcoinService {
 
             break;
         }
-        let block = client.get_block(block_hash, &rollup_name).await?;
+        let block = client.get_block(block_hash).await?;
 
         Ok(block)
     }
@@ -181,19 +180,31 @@ impl DaService for BitcoinService {
 
         // iterate over all transactions in the block
         for tx in block.txdata.iter() {
+            if !tx.txid().to_byte_array().as_slice().starts_with(&[0, 0]) {
+                continue;
+            }
+
             // check if the inscription in script is relevant to the rollup
-            let parsed_inscription = parse_transaction(&tx.transaction, &self.rollup_name);
+            let parsed_inscription = parse_transaction(&tx, &self.rollup_name);
 
             if let Ok(inscription) = parsed_inscription {
-                let blob = inscription.body;
+                let public_key = secp256k1::PublicKey::from_slice(&inscription.public_key).unwrap();
+                let signature = ecdsa::Signature::from_compact(&inscription.signature).unwrap();
+                let message = Message::from_hashed_data::<sha256d::Hash>(&inscription.body);
 
-                // Decompress the blob
-                let decompressed_blob = decompress_blob(&blob);
+                let secp = Secp256k1::new();
+                if secp.verify_ecdsa(&message, &signature, &public_key).is_ok() {
+                    // Decompress the blob
+                    let decompressed_blob = decompress_blob(&inscription.body);
 
-                let relevant_tx =
-                    BlobWithSender::new(decompressed_blob, tx.sender.clone(), tx.blob_hash);
+                    let relevant_tx = BlobWithSender::new(
+                        decompressed_blob,
+                        inscription.public_key,
+                        bitcoin::hashes::sha256d::Hash::hash(&inscription.body).to_byte_array(),
+                    );
 
-                txs.push(relevant_tx);
+                    txs.push(relevant_tx);
+                }
             }
         }
         txs
@@ -218,11 +229,11 @@ impl DaService for BitcoinService {
             .txdata
             .iter()
             .map(|tx| {
-                let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
+                let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
                 // if tx_hash has two leading zeros, it is in the completeness proof
                 if tx_hash[0..2] == [0, 0] {
-                    completeness_proof.push(tx.transaction.clone());
+                    completeness_proof.push(tx.clone());
                 }
 
                 tx_hash
@@ -544,10 +555,7 @@ mod tests {
 
         let block_hash = hashes[0];
 
-        let block = rpc
-            .get_block(block_hash.to_string(), &da_service.rollup_name)
-            .await
-            .unwrap();
+        let block = rpc.get_block(block_hash.to_string()).await.unwrap();
 
         let block = da_service.get_block_at(block.header.height).await.unwrap();
 

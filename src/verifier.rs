@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use bitcoin::hashes::Hash;
-use bitcoin::{merkle_tree, Txid};
+use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
+use bitcoin::{merkle_tree, secp256k1, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::{DaSpec, DaVerifier};
@@ -132,11 +133,27 @@ impl DaVerifier for BitcoinVerifier {
                 // it must be parsed correctly
                 let parsed_tx = parse_transaction(tx, &self.rollup_name);
                 if parsed_tx.is_ok() {
-                    // TODO: check inscription.sender == blob.sender
+                    let parsed_tx = parsed_tx.unwrap();
 
-                    let blob = parsed_tx.unwrap().body;
+                    let blob = parsed_tx.body;
                     let blob_hash: [u8; 32] =
                         bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
+                    let public_key =
+                        secp256k1::PublicKey::from_slice(&parsed_tx.public_key).unwrap();
+                    let signature = ecdsa::Signature::from_compact(&parsed_tx.signature).unwrap();
+                    let message = Message::from_slice(&blob_hash).unwrap();
+
+                    let secp = Secp256k1::new();
+                    assert!(
+                        secp.verify_ecdsa(&message, &signature, &public_key).is_ok(),
+                        "tx with invalid signature found in completeness proof"
+                    );
+
+                    assert_eq!(
+                        parsed_tx.public_key, txs[index_completeness].sender.0,
+                        "incorrect sender in blob"
+                    );
+
                     // it must be in txs
                     assert!(
                         txs_to_check.remove(&blob_hash),
@@ -219,20 +236,17 @@ mod tests {
         hash_types::TxMerkleNode,
         hashes::Hash,
         string::FromHexStr,
-        BlockHash, CompactTarget, Transaction,
+        BlockHash, CompactTarget,
     };
     use core::str::FromStr;
     use hex;
     use sov_rollup_interface::da::{DaSpec, DaVerifier};
 
     use crate::{
-        helpers::{
-            builders::decompress_blob,
-            parsers::{parse_transaction, recover_sender_and_hash_from_tx},
-        },
+        helpers::{builders::decompress_blob, parsers::parse_transaction},
         spec::{
             blob::BlobWithSender, header::HeaderWrapper, proof::InclusionMultiProof,
-            transaction::ExtendedTransaction,
+            transaction::Transaction,
         },
     };
 
@@ -248,22 +262,20 @@ mod tests {
     }
 
     fn get_blob_with_sender(tx: &Transaction) -> BlobWithSender {
-        let (sender, blob_hash) = recover_sender_and_hash_from_tx(tx, "sov-btc").unwrap();
+        let tx = tx.clone();
 
-        let tx = ExtendedTransaction {
-            transaction: tx.clone(),
-            sender: Some(sender),
-            blob_hash: Some(blob_hash),
-        };
-
-        let parsed_inscription = parse_transaction(&tx.transaction, "sov-btc").unwrap();
+        let parsed_inscription = parse_transaction(&tx, "sov-btc").unwrap();
 
         let blob = parsed_inscription.body;
 
         // Decompress the blob
         let decompressed_blob = decompress_blob(&blob);
 
-        BlobWithSender::new(decompressed_blob, tx.sender.clone(), tx.blob_hash)
+        BlobWithSender::new(
+            decompressed_blob,
+            parsed_inscription.public_key,
+            bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array(),
+        )
     }
 
     fn get_mock_data() -> (
@@ -560,7 +572,34 @@ mod tests {
 
         let new_blob = vec![2; 152];
 
-        txs[1] = BlobWithSender::new(new_blob, Some(txs[1].sender.0.clone()), Some(txs[1].hash));
+        txs[1] = BlobWithSender::new(new_blob, txs[1].sender.0.clone(), txs[1].hash);
+
+        verifier
+            .verify_relevant_tx_list(
+                &block_header,
+                txs.as_slice(),
+                inclusion_proof,
+                completeness_proof,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "incorrect sender in blob")]
+    fn tamper_senders() {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string(),
+        };
+
+        let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
+
+        txs[1] = BlobWithSender::new(
+            parse_transaction(&completeness_proof[1], "sov-btc")
+                .unwrap()
+                .body,
+            vec![2; 33],
+            txs[1].hash,
+        );
 
         verifier
             .verify_relevant_tx_list(

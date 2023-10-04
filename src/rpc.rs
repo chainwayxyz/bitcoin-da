@@ -4,16 +4,15 @@ use core::str::FromStr;
 use bitcoin::block::{Header, Version};
 use bitcoin::consensus::Decodable;
 use bitcoin::hash_types::TxMerkleNode;
-use bitcoin::{Address, BlockHash, CompactTarget, Network, Transaction};
+use bitcoin::{Address, BlockHash, CompactTarget, Network};
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, to_value};
 
-use crate::helpers::parsers::recover_sender_and_hash_from_tx;
 use crate::spec::block::BitcoinBlock;
 use crate::spec::header::HeaderWrapper;
-use crate::spec::transaction::ExtendedTransaction;
+use crate::spec::transaction::Transaction;
 use crate::spec::utxo::UTXO;
 
 // RPCError is a struct that represents an error returned by the Bitcoin RPC
@@ -107,11 +106,7 @@ impl BitcoinNode {
     }
 
     // get_block returns the block at the given hash
-    pub async fn get_block(
-        &self,
-        hash: String,
-        rollup_name: &str,
-    ) -> Result<BitcoinBlock, anyhow::Error> {
+    pub async fn get_block(&self, hash: String) -> Result<BitcoinBlock, anyhow::Error> {
         let result = self
             .call::<Box<RawValue>>(
                 "getblock",
@@ -147,7 +142,7 @@ impl BitcoinNode {
 
         let txdata = full_block.get("tx").unwrap().as_array().unwrap();
 
-        let txs: Vec<ExtendedTransaction> = txdata
+        let txs: Vec<Transaction> = txdata
             .iter()
             .map(|tx| {
                 let tx_hex = tx.get("hex").unwrap().as_str().unwrap();
@@ -155,21 +150,7 @@ impl BitcoinNode {
                 let transaction =
                     Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..]).unwrap();
 
-                let extended_tx = match recover_sender_and_hash_from_tx(&transaction, rollup_name) {
-                    // TODO: remve sender
-                    Ok((sender, blob_hash)) => ExtendedTransaction {
-                        transaction,
-                        sender: Some(sender),
-                        blob_hash: Some(blob_hash),
-                    },
-                    Err(_) => ExtendedTransaction {
-                        transaction,
-                        sender: None,
-                        blob_hash: None,
-                    },
-                };
-
-                extended_tx
+                transaction
             })
             .collect();
 
