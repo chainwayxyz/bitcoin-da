@@ -53,13 +53,18 @@ impl BitcoinNode {
                 base64::encode(format!("{}:{}", username, password))
             )
             .parse()
-            .unwrap(),
+            .expect("Failed to parse auth header!"),
         );
-        headers.insert("Content-Type", "application/json".parse().unwrap());
+        headers.insert(
+            "Content-Type",
+            "application/json"
+                .parse()
+                .expect("Failed to parse content type header!"),
+        );
         let client = reqwest::Client::builder()
             .default_headers(headers)
             .build()
-            .unwrap();
+            .expect("Failed to build client!");
 
         Self {
             url,
@@ -125,7 +130,7 @@ impl BitcoinNode {
                 full_block.get("merkleroot").unwrap().as_str().unwrap(),
             )
             .unwrap(),
-            nonce: full_block.get("nonce").unwrap().as_i64().unwrap() as u32,
+            nonce: full_block.get("nonce").unwrap().as_u64().unwrap() as u32,
             prev_blockhash: BlockHash::from_str(
                 full_block
                     .get("previousblockhash")
@@ -134,9 +139,9 @@ impl BitcoinNode {
                     .unwrap(),
             )
             .unwrap(),
-            time: full_block.get("time").unwrap().as_i64().unwrap() as u32,
+            time: full_block.get("time").unwrap().as_u64().unwrap() as u32,
             version: Version::from_consensus(
-                full_block.get("version").unwrap().as_i64().unwrap() as i32
+                full_block.get("version").unwrap().as_u64().unwrap() as i32
             ),
         };
 
@@ -156,11 +161,7 @@ impl BitcoinNode {
         let height = full_block.get("height").unwrap().as_u64().unwrap();
 
         Ok(BitcoinBlock {
-            header: HeaderWrapper {
-                header,
-                tx_count: txs.len() as u32,
-                height,
-            },
+            header: HeaderWrapper::new(header, txs.len() as u32, height),
             txdata: txs,
         })
     }

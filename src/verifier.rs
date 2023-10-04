@@ -5,7 +5,7 @@ use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
 use bitcoin::{merkle_tree, secp256k1, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
-use sov_rollup_interface::da::{DaSpec, DaVerifier};
+use sov_rollup_interface::da::{BlockHeaderTrait, DaSpec, DaVerifier};
 use sov_rollup_interface::digest::Digest;
 use sov_rollup_interface::zk::ValidityCondition;
 use thiserror::Error;
@@ -79,16 +79,8 @@ impl DaVerifier for BitcoinVerifier {
         completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
         let validity_condition = ChainValidityCondition {
-            prev_hash: block_header
-                .header
-                .prev_blockhash
-                .to_raw_hash()
-                .to_byte_array(),
-            block_hash: block_header
-                .header
-                .block_hash()
-                .to_raw_hash()
-                .to_byte_array(),
+            prev_hash: block_header.prev_hash().to_byte_array(),
+            block_hash: block_header.prev_hash().to_byte_array(),
         };
 
         // completeness proof
@@ -202,11 +194,7 @@ impl DaVerifier for BitcoinVerifier {
             "non-relevant transaction found in completeness proof"
         );
 
-        let tx_root = block_header
-            .header
-            .merkle_root
-            .to_raw_hash()
-            .to_byte_array();
+        let tx_root = block_header.merkle_root().to_raw_hash().to_byte_array();
 
         // Inclusion proof is all the txs in the block.
         let tx_hashes = inclusion_proof
@@ -285,8 +273,8 @@ mod tests {
         <<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::CompletenessProof, // completeness proof
         Vec<<<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::BlobTransaction>, // txs
     ) {
-        let header = HeaderWrapper {
-            header: Header {
+        let header = HeaderWrapper::new(
+            Header {
                 version: Version::from_consensus(536870912),
                 prev_blockhash: BlockHash::from_str(
                     "6b15a2e4b17b0aabbd418634ae9410b46feaabf693eea4c8621ffe71435d24b0",
@@ -300,9 +288,9 @@ mod tests {
                 bits: CompactTarget::from_hex_str_no_prefix("207fffff").unwrap(),
                 nonce: 0,
             },
-            tx_count: 13,
-            height: 2,
-        };
+            13,
+            2,
+        );
 
         let block_txs = get_mock_txs();
 

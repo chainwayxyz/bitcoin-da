@@ -35,23 +35,6 @@ pub struct BitcoinService {
     address: String,
     sequencer_da_private_key: String,
 }
-impl BitcoinService {
-    pub fn with_client(
-        client: BitcoinNode,
-        rollup_name: String,
-        network: bitcoin::Network,
-        address: String,
-        sequencer_da_private_key: String,
-    ) -> Self {
-        Self {
-            client,
-            rollup_name,
-            network,
-            address,
-            sequencer_da_private_key,
-        }
-    }
-}
 
 /// Runtime configuration for the DA service
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -94,6 +77,22 @@ impl BitcoinService {
             config.address.unwrap_or("".to_owned()),
             config.sequencer_da_private_key.unwrap_or("".to_owned()),
         )
+    }
+
+    pub fn with_client(
+        client: BitcoinNode,
+        rollup_name: String,
+        network: bitcoin::Network,
+        address: String,
+        sequencer_da_private_key: String,
+    ) -> Self {
+        Self {
+            client,
+            rollup_name,
+            network,
+            address,
+            sequencer_da_private_key,
+        }
     }
 }
 
@@ -175,7 +174,7 @@ impl DaService for BitcoinService {
 
         info!(
             "Extracting relevant txs from block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         // iterate over all transactions in the block
@@ -220,7 +219,7 @@ impl DaService for BitcoinService {
     ) {
         info!(
             "Getting extraction proof for block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         let mut completeness_proof = Vec::with_capacity(block.txdata.len());
@@ -257,7 +256,7 @@ impl DaService for BitcoinService {
     ) {
         info!(
             "Extracting relevant txs with proof from block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         let txs = self.extract_relevant_txs(block);
@@ -466,12 +465,7 @@ mod tests {
 
         println!("\n--- Completeness proof verified ---\n");
 
-        let tx_root = block
-            .header
-            .header
-            .merkle_root
-            .to_raw_hash()
-            .to_byte_array();
+        let tx_root = block.header.merkle_root().to_raw_hash().to_byte_array();
 
         // Inclusion proof is all the txs in the block.
         let tx_hashes = inclusion_proof

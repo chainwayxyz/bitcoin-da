@@ -1,4 +1,3 @@
-use bitcoin::hashes::Hash;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::BlockHeaderTrait;
 use sov_rollup_interface::services::da::SlotData;
@@ -28,13 +27,7 @@ impl SlotData for BitcoinBlock {
 
     fn validity_condition(&self) -> Self::Cond {
         ChainValidityCondition {
-            prev_hash: self
-                .header
-                .header
-                .prev_blockhash
-                .clone()
-                .as_raw_hash()
-                .to_byte_array(),
+            prev_hash: self.header.prev_hash().to_byte_array(),
             block_hash: self.header.hash().as_ref().try_into().unwrap(),
         }
     }

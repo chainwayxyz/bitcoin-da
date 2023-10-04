@@ -1,4 +1,4 @@
-use bitcoin::BlockHash;
+use bitcoin::{hashes::Hash, BlockHash};
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::BlockHashTrait;
 
@@ -17,5 +17,11 @@ impl From<BlockHashWrapper> for [u8; 32] {
 impl AsRef<[u8]> for BlockHashWrapper {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
+    }
+}
+
+impl BlockHashWrapper {
+    pub fn to_byte_array(&self) -> [u8; 32] {
+        self.0.as_raw_hash().to_byte_array()
     }
 }
