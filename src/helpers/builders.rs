@@ -28,8 +28,8 @@ use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNA
 use crate::spec::utxo::UTXO;
 
 pub fn get_satpoint_to_inscribe(utxo: &UTXO) -> SatPoint {
-    let satpoint_str = utxo.tx_id.to_string() + ":" + &utxo.vout.to_string() + ":0"; // first offset
-    SatPoint::from_str(&satpoint_str).unwrap()
+    let satpoint = format!("{}:{}:{}", utxo.tx_id, utxo.vout, 0);
+    SatPoint::from_str(&satpoint).unwrap()
 }
 
 pub fn compress_blob(blob: &[u8]) -> Vec<u8> {
@@ -181,7 +181,12 @@ pub fn create_inscription_transactions(
             .unwrap();
 
         // create commit tx address
-        let commit_tx_address = Address::p2tr_tweaked(taproot_spend_info.output_key(), network);
+        let commit_tx_address = Address::p2tr(
+            &secp256k1,
+            public_key,
+            taproot_spend_info.merkle_root(),
+            network,
+        );
 
         // create reveal tx to arrange fee
         let (_, reveal_fee) = build_reveal_transaction(
