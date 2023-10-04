@@ -2,6 +2,7 @@ use core::iter::Peekable;
 
 use bitcoin::blockdata::opcodes::all::{OP_ENDIF, OP_IF};
 use bitcoin::blockdata::script::{Instruction, Instructions};
+use bitcoin::consensus::Decodable;
 use bitcoin::opcodes::OP_FALSE;
 use bitcoin::{Script, Transaction};
 use serde::{Deserialize, Serialize};
@@ -83,24 +84,25 @@ fn parse_relevant_inscriptions(
             }
             Instruction::PushBytes(bytes) => {
                 if inside_envelope {
-                    
                     // this looks ugly but we need to have least amount of
                     // iterations possible in a malicous case
                     // so if any of the conditions does not hold
                     // we return an error
                     if inside_envelope_index == 0 && bytes.as_bytes() != ROLLUP_NAME_TAG {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
-                    } else if inside_envelope_index == 1 && bytes.as_bytes() != rollup_name.as_bytes() {
+                    } else if inside_envelope_index == 1
+                        && bytes.as_bytes() != rollup_name.as_bytes()
+                    {
                         return Err(ParserError::InvalidRollupName);
                     } else if inside_envelope_index == 2 && bytes.as_bytes() != SIGNATURE_TAG {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 3 {
                         signature.extend(bytes.as_bytes());
-                    }  else if inside_envelope_index == 4 && bytes.as_bytes() != PUBLICKEY_TAG {
+                    } else if inside_envelope_index == 4 && bytes.as_bytes() != PUBLICKEY_TAG {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 5 {
                         public_key.extend(bytes.as_bytes());
-                    }  else if inside_envelope_index == 6 && bytes.as_bytes() != RANDOM_TAG {
+                    } else if inside_envelope_index == 6 && bytes.as_bytes() != RANDOM_TAG {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 8 && bytes.as_bytes() != BODY_TAG {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
@@ -129,6 +131,11 @@ fn parse_relevant_inscriptions(
     })
 }
 
+pub fn parse_hex_transaction(
+    tx_hex: &str,
+) -> Result<Transaction, bitcoin::consensus::encode::Error> {
+    Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..])
+}
 #[cfg(test)]
 mod tests {
     use bitcoin::{
@@ -435,7 +442,7 @@ mod tests {
         assert_eq!(result.public_key, vec![0u8; 64]);
     }
 
-    #[test]  
+    #[test]
     fn big_push() {
         let reveal_script = script::Builder::new()
             .push_opcode(OP_FALSE)
@@ -471,5 +478,4 @@ mod tests {
         assert_eq!(result.signature, vec![0u8; 64]);
         assert_eq!(result.public_key, vec![0u8; 64]);
     }
-
 }

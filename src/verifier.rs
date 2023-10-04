@@ -232,18 +232,19 @@ mod tests {
 
     use bitcoin::{
         block::{Header, Version},
-        consensus::Decodable,
         hash_types::TxMerkleNode,
         hashes::Hash,
         string::FromHexStr,
         BlockHash, CompactTarget,
     };
     use core::str::FromStr;
-    use hex;
     use sov_rollup_interface::da::{DaSpec, DaVerifier};
 
     use crate::{
-        helpers::{builders::decompress_blob, parsers::parse_transaction},
+        helpers::{
+            builders::decompress_blob,
+            parsers::{parse_hex_transaction, parse_transaction},
+        },
         spec::{
             blob::BlobWithSender, header::HeaderWrapper, proof::InclusionMultiProof,
             transaction::Transaction,
@@ -257,7 +258,7 @@ mod tests {
         let txs = std::fs::read_to_string("test_data/mock_txs.txt").unwrap();
 
         txs.lines()
-            .map(|tx| Transaction::consensus_decode(&mut &hex::decode(tx).unwrap()[..]).unwrap())
+            .map(|tx| parse_hex_transaction(tx).unwrap())
             .collect()
     }
 

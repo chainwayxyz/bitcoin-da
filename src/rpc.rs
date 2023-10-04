@@ -2,7 +2,6 @@ use core::fmt::Display;
 use core::str::FromStr;
 
 use bitcoin::block::{Header, Version};
-use bitcoin::consensus::Decodable;
 use bitcoin::hash_types::TxMerkleNode;
 use bitcoin::{Address, BlockHash, CompactTarget, Network};
 use reqwest::header::HeaderMap;
@@ -10,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{json, to_value};
 
+use crate::helpers::parsers::parse_hex_transaction;
 use crate::spec::block::BitcoinBlock;
 use crate::spec::header::HeaderWrapper;
 use crate::spec::transaction::Transaction;
@@ -147,8 +147,7 @@ impl BitcoinNode {
             .map(|tx| {
                 let tx_hex = tx.get("hex").unwrap().as_str().unwrap();
 
-                let transaction =
-                    Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..]).unwrap();
+                let transaction = parse_hex_transaction(tx_hex).unwrap(); // hex from rpc cannot be invalid
 
                 transaction
             })
