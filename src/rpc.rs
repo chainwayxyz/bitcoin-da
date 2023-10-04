@@ -163,12 +163,12 @@ impl BitcoinNode {
                         blob_hash: Some(blob_hash),
                     },
                     Err(_) => ExtendedTransaction {
-                            transaction,
-                            sender: None,
-                            blob_hash: None,
-                        }
+                        transaction,
+                        sender: None,
+                        blob_hash: None,
+                    },
                 };
-                
+
                 extended_tx
             })
             .collect();
@@ -258,11 +258,24 @@ impl BitcoinNode {
     }
 
     #[cfg(test)]
-    pub async fn generate_to_address(&self, address: Address, blocks: u32) -> Result<Vec<BlockHash>, anyhow::Error> {
+    pub async fn generate_to_address(
+        &self,
+        address: Address,
+        blocks: u32,
+    ) -> Result<Vec<BlockHash>, anyhow::Error> {
         if self.network == Network::Regtest {
-            self.call::<Vec<BlockHash>>("generatetoaddress", vec![to_value(blocks).unwrap(), to_value(address.to_string()).unwrap()]).await
+            self.call::<Vec<BlockHash>>(
+                "generatetoaddress",
+                vec![
+                    to_value(blocks).unwrap(),
+                    to_value(address.to_string()).unwrap(),
+                ],
+            )
+            .await
         } else {
-            Err(anyhow::anyhow!("Cannot generate blocks on non-regtest network"))
+            Err(anyhow::anyhow!(
+                "Cannot generate blocks on non-regtest network"
+            ))
         }
     }
 }

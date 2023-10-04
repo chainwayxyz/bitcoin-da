@@ -13,8 +13,8 @@ use sov_rollup_interface::services::da::DaService;
 use tracing::info;
 
 use crate::helpers::builders::{
-    create_inscription_transactions, get_satpoint_to_inscribe, sign_blob_with_private_key,
-    write_reveal_tx, compress_blob, decompress_blob,
+    compress_blob, create_inscription_transactions, decompress_blob, get_satpoint_to_inscribe,
+    sign_blob_with_private_key, write_reveal_tx,
 };
 use crate::helpers::parsers::parse_transaction;
 use crate::rpc::{BitcoinNode, RPCError};
@@ -190,11 +190,8 @@ impl DaService for BitcoinService {
                 // Decompress the blob
                 let decompressed_blob = decompress_blob(&blob);
 
-                let relevant_tx = BlobWithSender::new(
-                    decompressed_blob,
-                    tx.sender.clone(),
-                    tx.blob_hash,
-                );
+                let relevant_tx =
+                    BlobWithSender::new(decompressed_blob, tx.sender.clone(), tx.blob_hash);
 
                 txs.push(relevant_tx);
             }
@@ -340,7 +337,7 @@ mod tests {
 
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::{KeyPair, SecretKey};
-    use bitcoin::{merkle_tree, Txid, Address};
+    use bitcoin::{merkle_tree, Address, Txid};
     use sov_rollup_interface::services::da::DaService;
 
     use super::BitcoinService;
@@ -417,32 +414,31 @@ mod tests {
 
         let (txs, inclusion_proof, completeness_proof) =
             da_service.extract_relevant_txs_with_proof(&block).await;
-        
+
         // completeness proof
 
         // create hash set of txs
-        let mut txs_to_check = txs
-            .iter()
-            .map(|blob| blob.hash)
-            .collect::<HashSet<_>>();
+        let mut txs_to_check = txs.iter().map(|blob| blob.hash).collect::<HashSet<_>>();
 
         // Check every 00 bytes tx that parsed correctly is in txs
-        let mut completeness_tx_hashes = completeness_proof.iter().map(|tx| {
-            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
+        let mut completeness_tx_hashes = completeness_proof
+            .iter()
+            .map(|tx| {
+                let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
-            // it must parsed correctly
-            let parsed_tx = parse_transaction(tx, &da_service.rollup_name);
-            if parsed_tx.is_ok() {
-                let blob = parsed_tx.unwrap().body;
-                let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
-                // it must be in txs
-                assert!(txs_to_check.remove(&blob_hash));
-            }
+                // it must parsed correctly
+                let parsed_tx = parse_transaction(tx, &da_service.rollup_name);
+                if parsed_tx.is_ok() {
+                    let blob = parsed_tx.unwrap().body;
+                    let blob_hash: [u8; 32] =
+                        bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
+                    // it must be in txs
+                    assert!(txs_to_check.remove(&blob_hash));
+                }
 
-            tx_hash
-        })
-        .collect::<HashSet<_>>();
-        
+                tx_hash
+            })
+            .collect::<HashSet<_>>();
 
         // assert no extra txs than the ones in the completeness proof are left
         assert!(txs_to_check.is_empty());
@@ -507,11 +503,25 @@ mod tests {
         );
 
         // empty regtest mempool
-        rpc.generate_to_address(Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl").unwrap().require_network(bitcoin::Network::Regtest).unwrap(), 5).await.unwrap();
+        rpc.generate_to_address(
+            Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
+                .unwrap()
+                .require_network(bitcoin::Network::Regtest)
+                .unwrap(),
+            5,
+        )
+        .await
+        .unwrap();
 
         let da_service = get_service();
         let secp = bitcoin::secp256k1::Secp256k1::new();
-        let da_pubkey = KeyPair::from_secret_key(&secp, &SecretKey::from_str(&da_service.sequencer_da_private_key).unwrap()).public_key().serialize().to_vec();
+        let da_pubkey = KeyPair::from_secret_key(
+            &secp,
+            &SecretKey::from_str(&da_service.sequencer_da_private_key).unwrap(),
+        )
+        .public_key()
+        .serialize()
+        .to_vec();
 
         // incorrect private key
 
@@ -519,21 +529,34 @@ mod tests {
         da_service
             .send_transaction(blob.as_bytes())
             .await
-            .expect("Failed to send transaction");        
+            .expect("Failed to send transaction");
 
-        let hashes = rpc.generate_to_address(Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl").unwrap().require_network(bitcoin::Network::Regtest).unwrap(), 1).await.unwrap();
-        
-        let block_hash = hashes[0];
-
-        let block = rpc.get_block(block_hash.to_string(), &da_service.rollup_name).await.unwrap();
-
-        let block = da_service
-            .get_block_at(block.header.height)
+        let hashes = rpc
+            .generate_to_address(
+                Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
+                    .unwrap()
+                    .require_network(bitcoin::Network::Regtest)
+                    .unwrap(),
+                1,
+            )
             .await
             .unwrap();
 
+        let block_hash = hashes[0];
+
+        let block = rpc
+            .get_block(block_hash.to_string(), &da_service.rollup_name)
+            .await
+            .unwrap();
+
+        let block = da_service.get_block_at(block.header.height).await.unwrap();
+
         let txs = da_service.extract_relevant_txs(&block);
 
-        assert_eq!(txs.get(0).unwrap().sender.0, da_pubkey, "Publickey recovered incorrectly!");
+        assert_eq!(
+            txs.get(0).unwrap().sender.0,
+            da_pubkey,
+            "Publickey recovered incorrectly!"
+        );
     }
 }
