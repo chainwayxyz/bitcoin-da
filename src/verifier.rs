@@ -125,6 +125,9 @@ impl DaVerifier for BitcoinVerifier {
             // it must be parsed correctly
             let parsed_tx = parse_transaction(tx, &self.rollup_name);
             if parsed_tx.is_ok() {
+                // TODO: check inscription.sender == blob.sender
+
+
                 let blob = parsed_tx.unwrap().body;
                 let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
                 // it must be in txs

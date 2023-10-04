@@ -156,6 +156,7 @@ impl BitcoinNode {
                     Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..]).unwrap();
 
                 let extended_tx = match recover_sender_and_hash_from_tx(&transaction, rollup_name) {
+                    // TODO: remve sender
                     Ok((sender, blob_hash)) => ExtendedTransaction {
                         transaction,
                         sender: Some(sender),

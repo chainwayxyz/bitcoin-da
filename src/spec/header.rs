@@ -30,5 +30,4 @@ impl BlockHeaderTrait for HeaderWrapper {
     fn time(&self) -> sov_rollup_interface::da::Time {
         sov_rollup_interface::da::Time::from_secs(self.header.time as i64)
     }
-
 }
