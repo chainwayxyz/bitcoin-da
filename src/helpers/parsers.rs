@@ -49,8 +49,11 @@ fn parse_relevant_inscriptions(
 ) -> Result<ParsedInscription, ParserError> {
     let mut last_op = None;
     let mut inside_envelope = false;
-    let mut pushed_bytes: Vec<&[u8]> = Vec::new();
     let mut inside_envelope_index = 0;
+
+    let mut body: Vec<u8> = Vec::new();
+    let mut signature: Vec<u8> = Vec::new();
+    let mut public_key: Vec<u8> = Vec::new();
 
     // this while loop is optimized for the least amount of iterations
     // for a strict envelope structure
@@ -80,15 +83,31 @@ fn parse_relevant_inscriptions(
             }
             Instruction::PushBytes(bytes) => {
                 if inside_envelope {
-                    // as bitcoin-da gets more usage
-                    // different namespaces will be used
-                    // so we want to stop parsing if the rollup name is not the one we are looking for
-                    // as soon as possible
-                    if inside_envelope_index == 1 && bytes.as_bytes() != rollup_name.as_bytes() {
+                    
+                    // this looks ugly but we need to have least amount of
+                    // iterations possible in a malicous case
+                    // so if any of the conditions does not hold
+                    // we return an error
+                    if inside_envelope_index == 0 && bytes.as_bytes() != ROLLUP_NAME_TAG {
+                        return Err(ParserError::EnvelopeHasIncorrectFormat);
+                    } else if inside_envelope_index == 1 && bytes.as_bytes() != rollup_name.as_bytes() {
                         return Err(ParserError::InvalidRollupName);
+                    } else if inside_envelope_index == 2 && bytes.as_bytes() != SIGNATURE_TAG {
+                        return Err(ParserError::EnvelopeHasIncorrectFormat);
+                    } else if inside_envelope_index == 3 {
+                        signature.extend(bytes.as_bytes());
+                    }  else if inside_envelope_index == 4 && bytes.as_bytes() != PUBLICKEY_TAG {
+                        return Err(ParserError::EnvelopeHasIncorrectFormat);
+                    } else if inside_envelope_index == 5 {
+                        public_key.extend(bytes.as_bytes());
+                    }  else if inside_envelope_index == 6 && bytes.as_bytes() != RANDOM_TAG {
+                        return Err(ParserError::EnvelopeHasIncorrectFormat);
+                    } else if inside_envelope_index == 8 && bytes.as_bytes() != BODY_TAG {
+                        return Err(ParserError::EnvelopeHasIncorrectFormat);
+                    } else if inside_envelope_index >= 9 {
+                        body.extend(bytes.as_bytes());
                     }
 
-                    pushed_bytes.push(bytes.as_bytes());
                     inside_envelope_index += 1;
                 } else {
                     if bytes.len() == 0 {
@@ -99,24 +118,14 @@ fn parse_relevant_inscriptions(
         }
     }
 
-    if pushed_bytes.len() != 10
-        || pushed_bytes[0] != ROLLUP_NAME_TAG
-        || pushed_bytes[2] != SIGNATURE_TAG
-        || pushed_bytes[4] != PUBLICKEY_TAG
-        || pushed_bytes[6] != RANDOM_TAG
-        || pushed_bytes[8] != BODY_TAG
-    {
+    if body.len() == 0 || signature.len() == 0 || public_key.len() == 0 {
         return Err(ParserError::EnvelopeHasIncorrectFormat);
     }
 
-    let signature_bytes = pushed_bytes[3];
-    let public_key_bytes = pushed_bytes[5];
-    let body_bytes = pushed_bytes[9];
-
     Ok(ParsedInscription {
-        body: body_bytes.to_vec(),
-        signature: signature_bytes.to_vec(),
-        public_key: public_key_bytes.to_vec(),
+        body,
+        signature,
+        public_key,
     })
 }
 
@@ -224,7 +233,7 @@ mod tests {
             parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
 
         assert!(result.is_err(), "Failed to error on no name tag.");
-        assert_eq!(result.unwrap_err(), ParserError::InvalidRollupName); // this one will fail in-envelope name check
+        assert_eq!(result.unwrap_err(), ParserError::EnvelopeHasIncorrectFormat);
 
         // signature
         let reveal_script_builder = script::Builder::new()
@@ -425,4 +434,42 @@ mod tests {
         assert_eq!(result.signature, vec![0u8; 64]);
         assert_eq!(result.public_key, vec![0u8; 64]);
     }
+
+    #[test]  
+    fn big_push() {
+        let reveal_script = script::Builder::new()
+            .push_opcode(OP_FALSE)
+            .push_opcode(OP_IF)
+            .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
+            .push_int(0)
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
+            .push_opcode(OP_ENDIF)
+            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_opcode(OP_CHECKSIG)
+            .into_script();
+
+        let result =
+            parse_relevant_inscriptions(&mut reveal_script.instructions().peekable(), "sov-btc");
+
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+
+        assert_eq!(result.body, vec![1u8; 512 * 6]);
+        assert_eq!(result.signature, vec![0u8; 64]);
+        assert_eq!(result.public_key, vec![0u8; 64]);
+    }
+
 }
