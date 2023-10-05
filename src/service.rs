@@ -1,7 +1,9 @@
 use core::result::Result::Ok;
 use core::str::FromStr;
 use core::time::Duration;
+use std::sync::{Arc, Mutex};
 
+use alloc::collections::VecDeque;
 use async_trait::async_trait;
 use bitcoin::consensus::encode;
 use bitcoin::hashes::{sha256d, Hash};
@@ -34,6 +36,8 @@ pub struct BitcoinService {
     network: bitcoin::Network,
     address: String,
     sequencer_da_private_key: String,
+    last_fee_rates: Arc<Mutex<VecDeque<f64>>>,
+    fee_rates_to_avg: usize,
 }
 
 /// Runtime configuration for the DA service
@@ -52,6 +56,9 @@ pub struct DaServiceConfig {
 
     // da private key of the sequencer
     pub sequencer_da_private_key: Option<String>,
+
+    // number of last paid fee rates to average if estimation fails
+    pub fee_rates_to_avg: usize,
 }
 
 const FINALITY_DEPTH: u64 = 4; // blocks
@@ -76,6 +83,7 @@ impl BitcoinService {
             network,
             config.address.unwrap_or("".to_owned()),
             config.sequencer_da_private_key.unwrap_or("".to_owned()),
+            config.fee_rates_to_avg,
         )
     }
 
@@ -85,6 +93,7 @@ impl BitcoinService {
         network: bitcoin::Network,
         address: String,
         sequencer_da_private_key: String,
+        fee_rates_to_avg: usize,
     ) -> Self {
         Self {
             client,
@@ -92,6 +101,8 @@ impl BitcoinService {
             network,
             address,
             sequencer_da_private_key,
+            last_fee_rates: Arc::new(Mutex::new(VecDeque::new())),
+            fee_rates_to_avg,
         }
     }
 }
@@ -294,8 +305,43 @@ impl DaService for BitcoinService {
             .expect("Sequencer sign the blob");
 
         // get fee rate from node
-        let fee_sat_per_vbyte: f64 = client.estimate_smart_fee().await?;
+        // if fail to get fee use avg of MAX_COUNT_OF_FEES_TO_AVG last used fees
+        let fee_sat_per_vbyte = match client.estimate_smart_fee().await {
+            Ok(fee) => {
+                let shared = self.last_fee_rates.clone();
 
+                let mut last_fee_rates = shared.lock().unwrap();
+                last_fee_rates.push_back(fee);
+
+                if last_fee_rates.len() > self.fee_rates_to_avg {
+                    last_fee_rates.pop_front();
+                }
+
+                fee
+            }
+            Err(_) => {
+                let shared = self.last_fee_rates.clone();
+
+                let last_fee_rates = shared.lock().unwrap();
+
+                let mut sum = 0.0;
+                for fee in last_fee_rates.iter() {
+                    sum += fee;
+                }
+
+                let len = last_fee_rates.len();
+                let average = if len > 0 { sum / len as f64 } else { 12.0 };
+
+                average
+            }
+        };
+
+        {
+            let shared = self.last_fee_rates.clone();
+
+            let last_fee_rates = shared.lock().unwrap();
+            println!("before tx: {:?}", last_fee_rates);
+        }
         // create inscribe transactions
         let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
             &rollup_name,
@@ -366,6 +412,7 @@ mod tests {
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
+            fee_rates_to_avg: 2, // small to speed up tests
         };
 
         BitcoinService::new(
@@ -496,6 +543,39 @@ mod tests {
             .send_transaction(blob.as_bytes())
             .await
             .expect("Failed to send transaction");
+    }
+
+    #[tokio::test]
+    async fn fee_rates() {
+        let da_service = get_service();
+        let fee = da_service
+            .client
+            .estimate_smart_fee()
+            .await
+            .expect("Failed to get fee");
+
+        let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
+
+        for i in 0..3 {
+            println!("Sending tx #{}", i);
+            da_service
+                .send_transaction(blob.as_bytes())
+                .await
+                .expect("Failed to send transaction");
+        }
+
+        {
+            let shared = da_service.last_fee_rates.clone();
+
+            let mut last_fee_rates = shared.lock().unwrap();
+
+            let mut fees: Vec<f64> = vec![];
+            for _ in 0..da_service.fee_rates_to_avg {
+                fees.push(fee);
+            }
+
+            assert_eq!(last_fee_rates.make_contiguous(), fees.as_slice());
+        }
     }
 
     #[tokio::test]
