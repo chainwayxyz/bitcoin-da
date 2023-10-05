@@ -158,7 +158,7 @@ mod tests {
     #[test]
     fn correct() {
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn wrong_rollup_tag() {
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -220,7 +220,7 @@ mod tests {
     fn leave_out_tags() {
         // name
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -244,7 +244,7 @@ mod tests {
 
         // signature
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -268,7 +268,7 @@ mod tests {
 
         // publickey
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -292,7 +292,7 @@ mod tests {
 
         // body
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -315,7 +315,7 @@ mod tests {
 
         // random
         let reveal_script_builder = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn only_checksig() {
         let reveal_script = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .into_script();
 
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn complex_envelope() {
         let reveal_script = script::Builder::new()
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -378,7 +378,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
             .push_opcode(OP_TRUE)
             .push_opcode(OP_IF)
-            .push_slice(XOnlyPublicKey::from_slice(&[2; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_ENDIF)
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
@@ -413,7 +413,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 128]).unwrap())
             .push_opcode(OP_ENDIF)
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
@@ -463,7 +463,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![1u8; 512]).unwrap())
             .push_opcode(OP_ENDIF)
-            .push_slice(XOnlyPublicKey::from_slice(&[1; 32]).unwrap().serialize())
+            .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
             .push_opcode(OP_CHECKSIG)
             .into_script();
 

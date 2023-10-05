@@ -131,7 +131,7 @@ pub fn create_inscription_transactions(
 
     // start creating inscription content
     let reveal_script_builder = script::Builder::new()
-        .push_slice(public_key.serialize())
+        .push_x_only_key(&public_key)
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
@@ -236,9 +236,7 @@ pub fn create_inscription_transactions(
             .unwrap();
 
         if reveal_tx.output[0].value < reveal_tx.output[0].script_pubkey.dust_value().to_sat() {
-            return Err(anyhow::anyhow!(
-                "commit transaction output would be dust".to_string()
-            ));
+            return Err(anyhow::anyhow!("commit transaction output would be dust"));
         }
 
         let reveal_hash = reveal_tx.txid().as_raw_hash().to_byte_array();
@@ -291,7 +289,7 @@ pub fn create_inscription_transactions(
 }
 
 pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
-    let reveal_tx_file = File::create("reveal_".to_string() + &tx_id + ".tx").unwrap();
+    let reveal_tx_file = File::create(format!("reveal_{}.tx", tx_id)).unwrap();
     let mut reveal_tx_writer = BufWriter::new(reveal_tx_file);
     reveal_tx_writer.write_all(tx).unwrap();
 }
