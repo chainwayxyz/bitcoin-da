@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
 use bitcoin::{merkle_tree, secp256k1, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::helpers::builders::decompress_blob;
 use crate::helpers::parsers::parse_transaction;
-use crate::spec::BitcoinSpec;
+use crate::spec::{blob, BitcoinSpec};
 
 pub struct BitcoinVerifier {
     pub rollup_name: String,
@@ -74,10 +74,12 @@ impl DaVerifier for BitcoinVerifier {
     fn verify_relevant_tx_list(
         &self,
         block_header: &<Self::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
-        txs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
+        blobs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
         inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
         completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
+        let secp = Secp256k1::new();
+
         let validity_condition = ChainValidityCondition {
             prev_hash: block_header.prev_hash().to_byte_array(),
             block_hash: block_header.prev_hash().to_byte_array(),
@@ -85,12 +87,12 @@ impl DaVerifier for BitcoinVerifier {
 
         // completeness proof
 
-        // create hash set of txs
-        let mut txs_to_check = txs.iter().map(|blob| blob.hash).collect::<HashSet<_>>();
+        // create hash set of blobs
+        let mut blobs_iter = blobs.iter();
 
         let mut prev_index_in_inclusion = 0;
 
-        // Check every 00 bytes tx that parsed correctly is in txs
+        // Check every 00 bytes tx that parsed correctly is in blobs
         let mut completeness_tx_hashes = completeness_proof
             .iter()
             .enumerate()
@@ -127,47 +129,40 @@ impl DaVerifier for BitcoinVerifier {
                 if parsed_tx.is_ok() {
                     let parsed_tx = parsed_tx.unwrap();
 
-                    let blob = parsed_tx.body;
+                    let blob_from_inscription = parsed_tx.body;
                     let blob_hash: [u8; 32] =
-                        bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
+                        sha256d::Hash::hash(&blob_from_inscription).to_byte_array();
+
                     let public_key =
                         secp256k1::PublicKey::from_slice(&parsed_tx.public_key).unwrap();
                     let signature = ecdsa::Signature::from_compact(&parsed_tx.signature).unwrap();
                     let message = Message::from_slice(&blob_hash).unwrap();
 
-                    let secp = Secp256k1::new();
-                    assert!(
-                        secp.verify_ecdsa(&message, &signature, &public_key).is_ok(),
-                        "tx with invalid signature found in completeness proof"
-                    );
+                    if secp.verify_ecdsa(&message, &signature, &public_key).is_ok() {
+                        let blob = blobs_iter.next();
 
-                    assert_eq!(
-                        parsed_tx.public_key, txs[index_completeness].sender.0,
-                        "incorrect sender in blob"
-                    );
+                        assert!(blob.is_some(), "valid blob was not found in blobs");
 
-                    // it must be in txs
-                    assert!(
-                        txs_to_check.remove(&blob_hash),
-                        "blob in completeness proof is not found in txs"
-                    );
+                        let blob = blob.unwrap();
 
-                    // asserting txs order is preserved
-                    assert_eq!(
-                        txs[index_completeness].hash, blob_hash,
-                        "order of transactions is not preserved"
-                    );
+                        assert_eq!(blob.hash, blob_hash, "blobs was tampered with");
 
-                    // decompress the blob
-                    let decompressed_blob = decompress_blob(&blob);
+                        assert_eq!(
+                            parsed_tx.public_key, blob.sender.0,
+                            "incorrect sender in blob"
+                        );
 
-                    // read the supplied blob from txs
-                    let mut blob_content = txs[index_completeness].blob.clone();
-                    blob_content.advance(blob_content.total_len());
-                    let blob_content = blob_content.accumulator();
+                        // decompress the blob
+                        let decompressed_blob = decompress_blob(&blob_from_inscription);
 
-                    // assert tx content is not modified
-                    assert_eq!(blob_content, decompressed_blob, "blob content was modified");
+                        // read the supplied blob from txs
+                        let mut blob_content = blobs[index_completeness].blob.clone();
+                        blob_content.advance(blob_content.total_len());
+                        let blob_content = blob_content.accumulator();
+
+                        // assert tx content is not modified
+                        assert_eq!(blob_content, decompressed_blob, "blob content was modified");
+                    }
                 }
 
                 tx_hash
@@ -175,7 +170,10 @@ impl DaVerifier for BitcoinVerifier {
             .collect::<HashSet<_>>();
 
         // assert no extra txs than the ones in the completeness proof are left
-        assert!(txs_to_check.is_empty(), "completeness proof is incorrect");
+        assert!(
+            blobs_iter.next().is_none(),
+            "completeness proof is incorrect"
+        );
 
         // no 00 bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
@@ -221,7 +219,7 @@ mod tests {
     use bitcoin::{
         block::{Header, Version},
         hash_types::TxMerkleNode,
-        hashes::Hash,
+        hashes::{sha256d, Hash},
         string::FromHexStr,
         BlockHash, CompactTarget,
     };
@@ -263,7 +261,7 @@ mod tests {
         BlobWithSender::new(
             decompressed_blob,
             parsed_inscription.public_key,
-            bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array(),
+            sha256d::Hash::hash(&blob).to_byte_array(),
         )
     }
 
@@ -487,15 +485,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "order of transactions is not preserved")]
+    #[should_panic(
+        expected = "tx in completeness proof is not found in DA block or order was not preserved"
+    )]
     fn break_completeness_proof_order() {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string(),
         };
 
-        let (block_header, inclusion_proof, mut completeness_proof, txs) = get_mock_data();
+        let (block_header, inclusion_proof, mut completeness_proof, mut txs) = get_mock_data();
 
         completeness_proof.swap(2, 3);
+        txs.swap(2, 3);
 
         verifier
             .verify_relevant_tx_list(
@@ -508,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "order of transactions is not preserved")]
+    #[should_panic(expected = "blobs was tampered with")]
     fn break_rel_tx_order() {
         let verifier = BitcoinVerifier {
             rollup_name: "sov-btc".to_string(),
@@ -599,4 +600,6 @@ mod tests {
             )
             .unwrap();
     }
+
+    // TODO: wrong signature inside blob
 }

@@ -210,7 +210,7 @@ impl DaService for BitcoinService {
                     let relevant_tx = BlobWithSender::new(
                         decompressed_blob,
                         inscription.public_key,
-                        bitcoin::hashes::sha256d::Hash::hash(&inscription.body).to_byte_array(),
+                        sha256d::Hash::hash(&inscription.body).to_byte_array(),
                     );
 
                     txs.push(relevant_tx);
@@ -391,7 +391,7 @@ mod tests {
     use core::str::FromStr;
     use std::collections::HashSet;
 
-    use bitcoin::hashes::Hash;
+    use bitcoin::hashes::{sha256d, Hash};
     use bitcoin::secp256k1::{KeyPair, SecretKey};
     use bitcoin::{merkle_tree, Address, Txid};
     use sov_rollup_interface::services::da::DaService;
@@ -487,8 +487,7 @@ mod tests {
                 let parsed_tx = parse_transaction(tx, &da_service.rollup_name);
                 if parsed_tx.is_ok() {
                     let blob = parsed_tx.unwrap().body;
-                    let blob_hash: [u8; 32] =
-                        bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
+                    let blob_hash: [u8; 32] = sha256d::Hash::hash(&blob).to_byte_array();
                     // it must be in txs
                     assert!(txs_to_check.remove(&blob_hash));
                 }
