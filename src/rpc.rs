@@ -1,6 +1,7 @@
 use core::fmt::Display;
 use core::str::FromStr;
 
+use async_recursion::async_recursion;
 use bitcoin::block::{Header, Version};
 use bitcoin::hash_types::TxMerkleNode;
 use bitcoin::{Address, BlockHash, CompactTarget, Network};
@@ -73,12 +74,13 @@ impl BitcoinNode {
         }
     }
 
+    #[async_recursion]
     async fn call<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<T, anyhow::Error> {
-        let response: Response<T> = self
+        let response = self
             .client
             .post(&self.url)
             .json(&json!({
@@ -88,9 +90,22 @@ impl BitcoinNode {
                 "params": params
             }))
             .send()
-            .await?
-            .json::<Response<T>>()
-            .await?;
+            .await;
+
+        // sometimes requests to bitcoind are dropped without a reason
+        // so impl. recursive retry
+        // TODO: add max retries
+        if response.is_err() {
+            let error = response.unwrap_err();
+            // TODO: maybe remove is_request() check?
+            if error.is_connect() || error.is_timeout() || error.is_request() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                return self.call(method, params).await;
+            }
+            return Err(anyhow::anyhow!(error));
+        }
+
+        let response = response.unwrap().json::<Response<T>>().await?;
 
         if let Some(error) = response.error {
             return Err(anyhow::anyhow!(error));
