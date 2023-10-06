@@ -12,7 +12,7 @@ use thiserror::Error;
 
 use crate::helpers::builders::decompress_blob;
 use crate::helpers::parsers::parse_transaction;
-use crate::spec::{blob, BitcoinSpec};
+use crate::spec::BitcoinSpec;
 
 pub struct BitcoinVerifier {
     pub rollup_name: String,
@@ -601,5 +601,24 @@ mod tests {
             .unwrap();
     }
 
-    // TODO: wrong signature inside blob
+    #[test]
+    #[should_panic(expected = "valid blob was not found in blobs")]
+    fn missing_rel_tx() {
+        let verifier = BitcoinVerifier {
+            rollup_name: "sov-btc".to_string(),
+        };
+
+        let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
+
+        txs = vec![txs[0].clone(), txs[1].clone(), txs[2].clone()];
+
+        verifier
+            .verify_relevant_tx_list(
+                &block_header,
+                txs.as_slice(),
+                inclusion_proof,
+                completeness_proof,
+            )
+            .unwrap();
+    }
 }
