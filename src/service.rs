@@ -5,19 +5,19 @@ use std::sync::{Arc, Mutex};
 
 use alloc::collections::VecDeque;
 use async_trait::async_trait;
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::consensus::encode;
 use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
 use bitcoin::{secp256k1, Address};
 use hex::ToHex;
-use ord::SatPoint;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::services::da::DaService;
 use tracing::info;
 
 use crate::helpers::builders::{
-    compress_blob, create_inscription_transactions, decompress_blob, get_satpoint_to_inscribe,
-    sign_blob_with_private_key, write_reveal_tx,
+    compress_blob, create_inscription_transactions, decompress_blob, sign_blob_with_private_key,
+    write_reveal_tx,
 };
 use crate::helpers::parsers::parse_transaction;
 use crate::rpc::{BitcoinNode, RPCError};
@@ -34,7 +34,7 @@ pub struct BitcoinService {
     client: BitcoinNode,
     rollup_name: String,
     network: bitcoin::Network,
-    address: String,
+    address: Address<NetworkUnchecked>,
     sequencer_da_private_key: String,
     last_fee_rates: Arc<Mutex<VecDeque<f64>>>,
     fee_rates_to_avg: usize,
@@ -49,10 +49,10 @@ pub struct DaServiceConfig {
     pub node_password: String,
 
     // network of the bitcoin node
-    pub network: Option<String>,
+    pub network: String,
 
     // taproot address that holds the funds of the sequencer
-    pub address: Option<String>,
+    pub address: String,
 
     // da private key of the sequencer
     pub sequencer_da_private_key: Option<String>,
@@ -68,7 +68,7 @@ impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
     pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
         let network =
-            bitcoin::Network::from_str(&config.network.unwrap_or("regtest".to_owned())).unwrap(); // default to regtest (?)
+            bitcoin::Network::from_str(&config.network).unwrap_or(bitcoin::Network::Regtest); // default to regtest (?)
 
         let client = BitcoinNode::new(
             config.node_url,
@@ -77,11 +77,13 @@ impl BitcoinService {
             network,
         );
 
+        let address = Address::from_str(&config.address).expect("Invalid bitcoin address");
+
         Self::with_client(
             client,
             chain_params.rollup_name,
             network,
-            config.address.unwrap_or("".to_owned()),
+            address,
             config.sequencer_da_private_key.unwrap_or("".to_owned()),
             config.fee_rates_to_avg,
         )
@@ -91,7 +93,7 @@ impl BitcoinService {
         client: BitcoinNode,
         rollup_name: String,
         network: bitcoin::Network,
-        address: String,
+        address: Address<NetworkUnchecked>,
         sequencer_da_private_key: String,
         fee_rates_to_avg: usize,
     ) -> Self {
@@ -282,23 +284,19 @@ impl DaService for BitcoinService {
 
         let blob = blob.to_vec();
         let network = self.network;
-        let address = self.address.clone();
+        let address = self
+            .address
+            .clone()
+            .require_network(network)
+            .expect("Invalid network for address");
         let rollup_name = self.rollup_name.clone();
         let sequencer_da_private_key = self.sequencer_da_private_key.clone();
 
         // Compress the blob
         let blob = compress_blob(&blob);
 
-        // get two change addresses that are necessary for the inscribe transaction
-        let change_addresses: [Address; 2] = client.get_change_addresses().await?;
-
         // get all available utxos
         let utxos: Vec<UTXO> = client.get_utxos().await?;
-
-        let satpoint: SatPoint = get_satpoint_to_inscribe(&utxos[0]);
-
-        // return funds to sequencer address
-        let destination_address = Address::from_str(&address.clone())?.require_network(network)?;
 
         // sign the blob for authentication of the sequencer
         let (signature, public_key) = sign_blob_with_private_key(&blob, &sequencer_da_private_key)
@@ -336,22 +334,14 @@ impl DaService for BitcoinService {
             }
         };
 
-        {
-            let shared = self.last_fee_rates.clone();
-
-            let last_fee_rates = shared.lock().unwrap();
-            println!("before tx: {:?}", last_fee_rates);
-        }
         // create inscribe transactions
         let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
             &rollup_name,
             blob,
             signature,
             public_key,
-            satpoint,
             utxos,
-            change_addresses,
-            destination_address,
+            address,
             fee_sat_per_vbyte,
             fee_sat_per_vbyte,
             network,
@@ -407,8 +397,8 @@ mod tests {
             node_url: "http://localhost:38332".to_string(),
             node_username: "chainway".to_string(),
             node_password: "topsecret".to_string(),
-            network: Some("regtest".to_string()),
-            address: Some("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl".to_string()),
+            network: "regtest".to_string(),
+            address: "bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl".to_string(),
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
