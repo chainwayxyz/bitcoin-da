@@ -1,7 +1,8 @@
-use core::result::Result::Ok;
-use core::str::FromStr;
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use core::{result::Result::Ok, str::FromStr};
+use std::{
+    fs::File,
+    io::{BufWriter, Write},
+};
 
 use anyhow::anyhow;
 use bitcoin::{
@@ -26,8 +27,10 @@ use bitcoin::{
 };
 use brotli::{CompressorWriter, DecompressorWriter};
 
-use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
-use crate::spec::utxo::UTXO;
+use crate::{
+    helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG},
+    spec::utxo::UTXO,
+};
 
 pub fn compress_blob(blob: &[u8]) -> Vec<u8> {
     let mut writer = CompressorWriter::new(Vec::new(), 4096, 11, 22);
@@ -419,10 +422,11 @@ pub fn create_inscription_transactions(
                 .unwrap();
 
             // sign reveal tx data
-            let signature = secp256k1.sign_schnorr(
+            let signature = secp256k1.sign_schnorr_with_rng(
                 &secp256k1::Message::from_slice(signature_hash.as_byte_array())
                     .expect("should be cryptographically secure hash"),
                 &key_pair,
+                &mut rand::thread_rng(),
             );
 
             // add signature to witness and finalize reveal tx
