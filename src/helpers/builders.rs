@@ -74,13 +74,15 @@ fn get_size(
         version: 1,
     };
 
-    tx.input[0].witness.push(
-        Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
-            .unwrap()
-            .as_ref(),
-    );
+    for i in 0..tx.input.len() {
+        tx.input[i].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+    }
 
-    if script.is_some() && control_block.is_some() {
+    if tx.input.len() == 1 && script.is_some() && control_block.is_some() {
         tx.input[0].witness.push(script.unwrap());
         tx.input[0].witness.push(control_block.unwrap().serialize());
     }
@@ -120,7 +122,7 @@ fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyh
         }
 
         if sum < amount {
-            return Err(anyhow!("not enought UTXOs"));
+            return Err(anyhow!("not enough UTXOs"));
         }
 
         Ok((chosen_utxos, sum))
@@ -130,6 +132,7 @@ fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyh
 fn build_commit_transaction(
     utxos: Vec<UTXO>,
     recipient: Address,
+    change_address: Address,
     output_value: u64,
     fee_rate: f64,
 ) -> Result<Transaction, anyhow::Error> {
@@ -163,18 +166,18 @@ fn build_commit_transaction(
         .collect::<Vec<UTXO>>();
 
     if utxos.len() == 0 {
-        return Err(anyhow::anyhow!("no spendable utxos"));
+        return Err(anyhow::anyhow!("no spendable UTXOs"));
     }
 
     let tx = loop {
-        let fee = ((size as f64) * fee_rate).ceil() as u64;
+        let fee = ((last_size as f64) * fee_rate).ceil() as u64;
 
         let input_total = output_value + fee;
 
         let res = choose_utxos(&utxos, input_total);
 
         if res.is_err() {
-            return Err(anyhow::anyhow!("utxos are not enough"));
+            return Err(res.unwrap_err());
         }
 
         let (chosen_utxos, sum) = res.unwrap();
@@ -187,12 +190,18 @@ fn build_commit_transaction(
         });
 
         let excess = sum.checked_sub(input_total);
-
-        if excess.is_some() && excess.unwrap() >= 546 {
-            outputs.push(TxOut {
-                value: sum - input_total,
-                script_pubkey: recipient.script_pubkey(),
-            });
+        let mut direct_return = false;
+        if excess.is_some() {
+            let excess = excess.unwrap();
+            if excess >= 546 {
+                outputs.push(TxOut {
+                    value: excess,
+                    script_pubkey: change_address.script_pubkey(),
+                });
+            } else {
+                // if dust is left, leave it for fee
+                direct_return = true;
+            }
         }
 
         let inputs = chosen_utxos
@@ -210,7 +219,7 @@ fn build_commit_transaction(
 
         size = get_size(&inputs, &outputs, None, None);
 
-        if size == last_size {
+        if size == last_size || direct_return {
             break Transaction {
                 lock_time: LockTime::ZERO,
                 version: 1,
@@ -388,8 +397,13 @@ pub fn create_inscription_transactions(
         );
 
         // build commit tx
-        let unsigned_commit_tx =
-            build_commit_transaction(utxos, commit_tx_address.clone(), 546, commit_fee_rate)?;
+        let unsigned_commit_tx = build_commit_transaction(
+            utxos,
+            commit_tx_address.clone(),
+            recipient.clone(),
+            546,
+            commit_fee_rate,
+        )?;
 
         let output_to_reveal = unsigned_commit_tx.output[0].clone();
 
@@ -464,7 +478,11 @@ pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
 mod tests {
     use core::str::FromStr;
 
-    use bitcoin::{hashes::Hash, Address, Txid};
+    use bitcoin::{
+        hashes::Hash,
+        secp256k1::{constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature},
+        Address, Txid,
+    };
 
     use crate::{
         helpers::{
@@ -518,10 +536,11 @@ mod tests {
         let body = vec![100; 1000];
         let signature = vec![100; 64];
         let sequencer_public_key = vec![100; 33];
-        let address = Address::from_str("bc1qf6cfk4nd875y9tyey7eyetwnlsx6t3yvdtd0wl")
-            .unwrap()
-            .require_network(bitcoin::Network::Bitcoin)
-            .unwrap();
+        let address =
+            Address::from_str("bc1pp8qru0ve43rw9xffmdd8pvveths3cx6a5t6mcr0xfn9cpxx2k24qf70xq9")
+                .unwrap()
+                .require_network(bitcoin::Network::Bitcoin)
+                .unwrap();
         let utxos = vec![
             UTXO {
                 tx_id: Txid::from_str(
@@ -529,7 +548,8 @@ mod tests {
                 )
                 .unwrap(),
                 vout: 0,
-                address: "bc1qf6cfk4nd875y9tyey7eyetwnlsx6t3yvdtd0wl".to_string(),
+                address: "bc1pp8qru0ve43rw9xffmdd8pvveths3cx6a5t6mcr0xfn9cpxx2k24qf70xq9"
+                    .to_string(),
                 script_pubkey: address.script_pubkey().to_hex_string(),
                 amount: 1_000_000,
                 confirmations: 100,
@@ -542,7 +562,8 @@ mod tests {
                 )
                 .unwrap(),
                 vout: 0,
-                address: "bc1qf6cfk4nd875y9tyey7eyetwnlsx6t3yvdtd0wl".to_string(),
+                address: "bc1pp8qru0ve43rw9xffmdd8pvveths3cx6a5t6mcr0xfn9cpxx2k24qf70xq9"
+                    .to_string(),
                 script_pubkey: address.script_pubkey().to_hex_string(),
                 amount: 100_000,
                 confirmations: 100,
@@ -555,7 +576,8 @@ mod tests {
                 )
                 .unwrap(),
                 vout: 0,
-                address: "bc1qf6cfk4nd875y9tyey7eyetwnlsx6t3yvdtd0wl".to_string(),
+                address: "bc1pp8qru0ve43rw9xffmdd8pvveths3cx6a5t6mcr0xfn9cpxx2k24qf70xq9"
+                    .to_string(),
                 script_pubkey: address.script_pubkey().to_hex_string(),
                 amount: 10_000,
                 confirmations: 100,
@@ -606,7 +628,166 @@ mod tests {
         let res = super::choose_utxos(&utxos, 100_000_000);
 
         assert!(res.is_err());
-        assert_eq!(format!("{}", res.unwrap_err()), "not enought UTXOs");
+        assert_eq!(format!("{}", res.unwrap_err()), "not enough UTXOs");
+    }
+
+    #[test]
+    fn build_commit_transaction() {
+        let (_, _, _, _, address, utxos) = get_mock_data();
+
+        let recipient =
+            Address::from_str("bc1p2e37kuhnsdc5zvc8zlj2hn6awv3ruavak6ayc8jvpyvus59j3mwqwdt0zc")
+                .unwrap()
+                .require_network(bitcoin::Network::Bitcoin)
+                .unwrap();
+        let mut tx = super::build_commit_transaction(
+            utxos.clone(),
+            recipient.clone(),
+            address.clone(),
+            5_000,
+            8.0,
+        )
+        .unwrap();
+
+        tx.input[0].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+
+        // 154 vB * 8 sat/vB = 1232 sats
+        // 5_000 + 1232 = 6232
+        // input: 10000
+        // outputs: 5_000 + 3.768
+        assert_eq!(tx.vsize(), 154);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.output.len(), 2);
+        assert_eq!(tx.output[0].value, 5_000);
+        assert_eq!(tx.output[0].script_pubkey, recipient.script_pubkey());
+        assert_eq!(tx.output[1].value, 3_768);
+        assert_eq!(tx.output[1].script_pubkey, address.script_pubkey());
+
+        let mut tx = super::build_commit_transaction(
+            utxos.clone(),
+            recipient.clone(),
+            address.clone(),
+            5_000,
+            45.0,
+        )
+        .unwrap();
+
+        tx.input[0].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+
+        // 111 vB * 45 sat/vB = 4.995 sats
+        // 5_000 + 4928 = 9995
+        // input: 10000
+        // outputs: 5_000
+        assert_eq!(tx.vsize(), 111);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.output.len(), 1);
+        assert_eq!(tx.output[0].value, 5_000);
+        assert_eq!(tx.output[0].script_pubkey, recipient.script_pubkey());
+
+        let mut tx = super::build_commit_transaction(
+            utxos.clone(),
+            recipient.clone(),
+            address.clone(),
+            5_000,
+            32.0,
+        )
+        .unwrap();
+
+        tx.input[0].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+
+        // you expect
+        // 154 vB * 32 sat/vB = 4.928 sats
+        // 5_000 + 4928 = 9928
+        // input: 10000
+        // outputs: 5_000 72
+        // instead do
+        // input: 10000
+        // outputs: 5_000
+        // so size is actually 111
+        assert_eq!(tx.vsize(), 111);
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.output.len(), 1);
+        assert_eq!(tx.output[0].value, 5_000);
+        assert_eq!(tx.output[0].script_pubkey, recipient.script_pubkey());
+
+        let mut tx = super::build_commit_transaction(
+            utxos.clone(),
+            recipient.clone(),
+            address.clone(),
+            1_050_000,
+            5.0,
+        )
+        .unwrap();
+
+        tx.input[0].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+        tx.input[1].witness.push(
+            Signature::from_slice(&[0; SCHNORR_SIGNATURE_SIZE])
+                .unwrap()
+                .as_ref(),
+        );
+
+        // 212 vB * 5 sat/vB = 1060 sats
+        // 1_050_000 + 1060 = 1_051_060
+        // inputs: 1_000_000 100_000
+        // outputs: 1_050_000 8940
+        assert_eq!(tx.vsize(), 212);
+        assert_eq!(tx.input.len(), 2);
+        assert_eq!(tx.output.len(), 2);
+        assert_eq!(tx.output[0].value, 1_050_000);
+        assert_eq!(tx.output[0].script_pubkey, recipient.script_pubkey());
+        assert_eq!(tx.output[1].value, 48940);
+        assert_eq!(tx.output[1].script_pubkey, address.script_pubkey());
+
+        let tx = super::build_commit_transaction(
+            utxos.clone(),
+            recipient.clone(),
+            address.clone(),
+            100_000_000_000,
+            32.0,
+        );
+
+        assert!(tx.is_err());
+        assert_eq!(format!("{}", tx.unwrap_err()), "not enough UTXOs");
+
+        let tx = super::build_commit_transaction(
+            vec![UTXO {
+                tx_id: Txid::from_str(
+                    "4cfbec13cf1510545f285cceceb6229bd7b6a918a8f6eba1dbee64d26226a3b7",
+                )
+                .unwrap(),
+                vout: 0,
+                address: "bc1pp8qru0ve43rw9xffmdd8pvveths3cx6a5t6mcr0xfn9cpxx2k24qf70xq9"
+                    .to_string(),
+                script_pubkey: address.script_pubkey().to_hex_string(),
+                amount: 152,
+                confirmations: 100,
+                spendable: true,
+                solvable: true,
+            }],
+            recipient.clone(),
+            address.clone(),
+            100_000_000_000,
+            32.0,
+        );
+
+        assert!(tx.is_err());
+        assert_eq!(format!("{}", tx.unwrap_err()), "no spendable UTXOs");
     }
 
     #[test]
