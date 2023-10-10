@@ -71,7 +71,7 @@ fn get_size(
         input: inputs.clone(),
         output: outputs.clone(),
         lock_time: LockTime::ZERO,
-        version: 1,
+        version: 2,
     };
 
     for i in 0..tx.input.len() {
@@ -222,7 +222,7 @@ fn build_commit_transaction(
         if size == last_size || direct_return {
             break Transaction {
                 lock_time: LockTime::ZERO,
-                version: 1,
+                version: 2,
                 input: inputs,
                 output: outputs,
             };
@@ -244,75 +244,36 @@ fn build_reveal_transaction(
     reveal_script: &ScriptBuf,
     control_block: &ControlBlock,
 ) -> Result<Transaction, anyhow::Error> {
-    let mut size = get_size(
-        &vec![TxIn {
-            previous_output: OutPoint {
-                txid: Txid::from_str(
-                    "0000000000000000000000000000000000000000000000000000000000000000",
-                )
-                .unwrap(),
-                vout: 0,
-            },
-            script_sig: script::Builder::new().into_script(),
-            witness: Witness::new(),
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-        }],
-        &vec![TxOut {
-            script_pubkey: recipient.clone().script_pubkey(),
-            value: output_value,
-        }],
-        Some(reveal_script),
-        Some(control_block),
-    );
-    let mut last_size = size;
+    let outputs: Vec<TxOut> = vec![TxOut {
+        value: output_value,
+        script_pubkey: recipient.script_pubkey(),
+    }];
 
-    if input_utxo.value < 546 {
-        return Err(anyhow::anyhow!("input utxo not big enough"));
+    let inputs = vec![TxIn {
+        previous_output: OutPoint {
+            txid: input_txid,
+            vout: input_vout,
+        },
+        script_sig: script::Builder::new().into_script(),
+        witness: Witness::new(),
+        sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+    }];
+
+    let size = get_size(&inputs, &outputs, Some(reveal_script), Some(control_block));
+
+    let fee = ((size as f64) * fee_rate).ceil() as u64;
+
+    let input_total = output_value + fee;
+
+    if input_utxo.value < 546 || input_utxo.value < input_total {
+        return Err(anyhow::anyhow!("input UTXO not big enough"));
     }
 
-    let tx = loop {
-        let fee = ((size as f64) * fee_rate).ceil() as u64;
-
-        let input_total = output_value + fee;
-
-        let mut outputs: Vec<TxOut> = vec![];
-
-        outputs.push(TxOut {
-            value: output_value,
-            script_pubkey: recipient.script_pubkey(),
-        });
-
-        let excess = input_utxo.value.checked_sub(input_total);
-
-        if excess.is_some() && excess.unwrap() >= 546 {
-            outputs.push(TxOut {
-                value: input_utxo.value - input_total,
-                script_pubkey: recipient.script_pubkey(),
-            });
-        }
-
-        let inputs = vec![TxIn {
-            previous_output: OutPoint {
-                txid: input_txid,
-                vout: input_vout,
-            },
-            script_sig: script::Builder::new().into_script(),
-            witness: Witness::new(),
-            sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
-        }];
-
-        size = get_size(&inputs, &outputs, Some(reveal_script), Some(control_block));
-
-        if size == last_size {
-            break Transaction {
-                lock_time: LockTime::ZERO,
-                version: 1,
-                input: inputs,
-                output: outputs,
-            };
-        }
-
-        last_size = size;
+    let tx = Transaction {
+        lock_time: LockTime::ZERO,
+        version: 2,
+        input: inputs,
+        output: outputs,
     };
 
     Ok(tx)
@@ -328,6 +289,7 @@ pub fn create_inscription_transactions(
     sequencer_public_key: Vec<u8>,
     utxos: Vec<UTXO>,
     recipient: Address,
+    reveal_value: u64,
     commit_fee_rate: f64,
     reveal_fee_rate: f64,
     network: Network,
@@ -396,12 +358,36 @@ pub fn create_inscription_transactions(
             network,
         );
 
+        let commit_value = (get_size(
+            &vec![TxIn {
+                previous_output: OutPoint {
+                    txid: Txid::from_str(
+                        "0000000000000000000000000000000000000000000000000000000000000000",
+                    )
+                    .unwrap(),
+                    vout: 0,
+                },
+                script_sig: script::Builder::new().into_script(),
+                witness: Witness::new(),
+                sequence: Sequence::ENABLE_RBF_NO_LOCKTIME,
+            }],
+            &vec![TxOut {
+                script_pubkey: recipient.clone().script_pubkey(),
+                value: reveal_value,
+            }],
+            Some(&reveal_script),
+            Some(&control_block),
+        ) as f64
+            * reveal_fee_rate
+            + reveal_value as f64)
+            .ceil() as u64;
+
         // build commit tx
         let unsigned_commit_tx = build_commit_transaction(
             utxos,
             commit_tx_address.clone(),
             recipient.clone(),
-            546,
+            commit_value,
             commit_fee_rate,
         )?;
 
@@ -412,7 +398,7 @@ pub fn create_inscription_transactions(
             unsigned_commit_tx.txid(),
             0,
             recipient,
-            546,
+            reveal_value,
             reveal_fee_rate,
             &reveal_script,
             &control_block,
@@ -481,7 +467,7 @@ mod tests {
     use bitcoin::{
         hashes::Hash,
         secp256k1::{constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature},
-        Address, Txid,
+        Address, ScriptBuf, TxOut, Txid, taproot::ControlBlock,
     };
 
     use crate::{
@@ -791,6 +777,82 @@ mod tests {
     }
 
     #[test]
+    fn build_reveal_transaction() {
+        let (_, _, _, _, address, utxos) = get_mock_data();
+
+        let utxo = utxos.get(0).unwrap();
+        let script = ScriptBuf::from_hex("62a58f2674fd840b6144bea2e63ebd35c16d7fd40252a2f28b2a01a648df356343e47976d7906a0e688bf5e134b6fd21bd365c016b57b1ace85cf30bf1206e27").unwrap();
+        let control_block = ControlBlock::decode(&[193, 165, 246, 250, 6, 222, 28, 9, 130, 28, 217, 67, 171, 11, 229, 62, 48, 206, 219, 111, 155, 208, 6, 7, 119, 63, 146, 90, 227, 254, 231, 232, 249]).unwrap(); // should be 33 bytes
+        
+        let mut tx = super::build_reveal_transaction(
+            TxOut {
+                value: utxo.amount,
+                script_pubkey: ScriptBuf::from_hex(utxo.script_pubkey.as_str()).unwrap(),
+            },
+            utxo.tx_id,
+            utxo.vout,
+            address.clone(),
+            546,
+            8.0,
+            &script,
+            &control_block,
+        ).unwrap();
+
+        tx.input[0].witness.push(&[0; SCHNORR_SIGNATURE_SIZE]);
+        tx.input[0].witness.push(script.clone());
+        tx.input[0].witness.push(control_block.serialize());
+
+        assert_eq!(tx.input.len(), 1);
+        assert_eq!(tx.input[0].previous_output.txid, utxo.tx_id);
+        assert_eq!(tx.input[0].previous_output.vout, utxo.vout);
+
+        assert_eq!(tx.output.len(), 1);
+        assert_eq!(tx.output[0].value, 546);
+        assert_eq!(tx.output[0].script_pubkey, address.script_pubkey());
+
+
+
+        let utxo = utxos.get(2).unwrap();
+
+        let tx = super::build_reveal_transaction(
+            TxOut {
+                value: utxo.amount,
+                script_pubkey: ScriptBuf::from_hex(utxo.script_pubkey.as_str()).unwrap(),
+            },
+            utxo.tx_id,
+            utxo.vout,
+            address.clone(),
+            546,
+            75.0,
+            &script,
+            &control_block,
+        );
+
+        assert!(tx.is_err());
+        assert_eq!(format!("{}", tx.unwrap_err()), "input UTXO not big enough");
+
+
+        let utxo = utxos.get(2).unwrap();
+
+        let tx = super::build_reveal_transaction(
+            TxOut {
+                value: utxo.amount,
+                script_pubkey: ScriptBuf::from_hex(utxo.script_pubkey.as_str()).unwrap(),
+            },
+            utxo.tx_id,
+            utxo.vout,
+            address.clone(),
+            9999,
+            1.0,
+            &script,
+            &control_block,
+        );
+
+        assert!(tx.is_err());
+        assert_eq!(format!("{}", tx.unwrap_err()), "input UTXO not big enough");
+        
+    }
+    #[test]
     fn create_inscription_transactions() {
         let (rollup_name, body, signature, sequencer_public_key, address, utxos) = get_mock_data();
 
@@ -801,6 +863,7 @@ mod tests {
             sequencer_public_key.clone(),
             utxos.clone(),
             address.clone(),
+            546,
             12.0,
             10.0,
             bitcoin::Network::Bitcoin,

@@ -52,6 +52,7 @@ pub struct DaServiceConfig {
     pub network: String,
 
     // taproot address that holds the funds of the sequencer
+    // will be used as the change address for the inscribe transaction
     pub address: String,
 
     // da private key of the sequencer
@@ -342,6 +343,7 @@ impl DaService for BitcoinService {
             public_key,
             utxos,
             address,
+            546,
             fee_sat_per_vbyte,
             fee_sat_per_vbyte,
             network,
@@ -398,7 +400,7 @@ mod tests {
             node_username: "chainway".to_string(),
             node_password: "topsecret".to_string(),
             network: "regtest".to_string(),
-            address: "bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl".to_string(),
+            address: "bcrt1qy85zdv5se9d9ceg9nvay36t6j86z95fny4rdzu".to_string(),
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
