@@ -18,7 +18,7 @@ impl SlotData for BitcoinBlock {
     type Cond = ChainValidityCondition;
 
     fn hash(&self) -> [u8; 32] {
-        self.header().hash().as_ref().try_into().unwrap()
+        self.header.hash().to_byte_array()
     }
 
     fn header(&self) -> &Self::BlockHeader {
@@ -28,7 +28,7 @@ impl SlotData for BitcoinBlock {
     fn validity_condition(&self) -> Self::Cond {
         ChainValidityCondition {
             prev_hash: self.header.prev_hash().to_byte_array(),
-            block_hash: self.header.hash().as_ref().try_into().unwrap(),
+            block_hash: self.hash(),
         }
     }
 }

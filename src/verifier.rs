@@ -125,20 +125,27 @@ impl DaVerifier for BitcoinVerifier {
                 );
 
                 // it must be parsed correctly
-                let parsed_tx = parse_transaction(tx, &self.rollup_name);
-                if parsed_tx.is_ok() {
-                    let parsed_tx = parsed_tx.unwrap();
-
+                if let Ok(parsed_tx) = parse_transaction(tx, &self.rollup_name) {
                     let blob_from_inscription = parsed_tx.body;
                     let blob_hash: [u8; 32] =
                         sha256d::Hash::hash(&blob_from_inscription).to_byte_array();
 
-                    let public_key =
-                        secp256k1::PublicKey::from_slice(&parsed_tx.public_key).unwrap();
-                    let signature = ecdsa::Signature::from_compact(&parsed_tx.signature).unwrap();
-                    let message = Message::from_slice(&blob_hash).unwrap();
+                    let public_key = secp256k1::PublicKey::from_slice(&parsed_tx.public_key);
 
-                    if secp.verify_ecdsa(&message, &signature, &public_key).is_ok() {
+                    let signature = ecdsa::Signature::from_compact(&parsed_tx.signature);
+                    let message = Message::from_slice(&blob_hash);
+
+                    if public_key.is_ok()
+                        && signature.is_ok()
+                        && message.is_ok()
+                        && secp
+                            .verify_ecdsa(
+                                &message.unwrap(),
+                                &signature.unwrap(),
+                                &public_key.unwrap(),
+                            )
+                            .is_ok()
+                    {
                         let blob = blobs_iter.next();
 
                         assert!(blob.is_some(), "valid blob was not found in blobs");
@@ -201,10 +208,14 @@ impl DaVerifier for BitcoinVerifier {
             .map(|tx| Txid::from_slice(tx).unwrap())
             .collect::<Vec<_>>();
 
-        let root_from_inclusion = merkle_tree::calculate_root(tx_hashes.into_iter())
-            .unwrap()
-            .to_raw_hash()
-            .to_byte_array();
+        let root_from_inclusion = merkle_tree::calculate_root(tx_hashes.into_iter());
+
+        assert!(
+            root_from_inclusion.is_some(),
+            "merkle root couldn't be computed"
+        );
+
+        let root_from_inclusion = root_from_inclusion.unwrap().to_raw_hash().to_byte_array();
 
         // Check that the tx root in the block header matches the tx root in the inclusion proof.
         assert_eq!(root_from_inclusion, tx_root, "inclusion proof is incorrect");

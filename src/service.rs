@@ -201,12 +201,17 @@ impl DaService for BitcoinService {
             let parsed_inscription = parse_transaction(&tx, &self.rollup_name);
 
             if let Ok(inscription) = parsed_inscription {
-                let public_key = secp256k1::PublicKey::from_slice(&inscription.public_key).unwrap();
-                let signature = ecdsa::Signature::from_compact(&inscription.signature).unwrap();
+                let public_key = secp256k1::PublicKey::from_slice(&inscription.public_key);
+                let signature = ecdsa::Signature::from_compact(&inscription.signature);
                 let message = Message::from_hashed_data::<sha256d::Hash>(&inscription.body);
 
                 let secp = Secp256k1::new();
-                if secp.verify_ecdsa(&message, &signature, &public_key).is_ok() {
+                if public_key.is_ok()
+                    && signature.is_ok()
+                    && secp
+                        .verify_ecdsa(&message, &signature.unwrap(), &public_key.unwrap())
+                        .is_ok()
+                {
                     // Decompress the blob
                     let decompressed_blob = decompress_blob(&inscription.body);
 
@@ -476,9 +481,8 @@ mod tests {
                 let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
                 // it must parsed correctly
-                let parsed_tx = parse_transaction(tx, &da_service.rollup_name);
-                if parsed_tx.is_ok() {
-                    let blob = parsed_tx.unwrap().body;
+                if let Ok(parsed_tx) = parse_transaction(tx, &da_service.rollup_name) {
+                    let blob = parsed_tx.body;
                     let blob_hash: [u8; 32] = sha256d::Hash::hash(&blob).to_byte_array();
                     // it must be in txs
                     assert!(txs_to_check.remove(&blob_hash));

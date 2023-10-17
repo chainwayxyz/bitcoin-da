@@ -51,7 +51,8 @@ pub fn sign_blob_with_private_key(
 ) -> Result<(Vec<u8>, Vec<u8>), ()> {
     let message = sha256d::Hash::hash(blob).to_byte_array();
     let secp = Secp256k1::new();
-    let key = secp256k1::SecretKey::from_str(private_key).unwrap();
+    let key = secp256k1::SecretKey::from_str(private_key)
+        .expect("Invalid private key while signing blob!");
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &key);
     let msg = secp256k1::Message::from_slice(&message).unwrap();
     let sig = secp.sign_ecdsa(&msg, &key);
@@ -174,13 +175,9 @@ fn build_commit_transaction(
 
         let input_total = output_value + fee;
 
-        let res = choose_utxos(&utxos, input_total);
+        let res = choose_utxos(&utxos, input_total)?;
 
-        if res.is_err() {
-            return Err(res.unwrap_err());
-        }
-
-        let (chosen_utxos, sum) = res.unwrap();
+        let (chosen_utxos, sum) = res;
 
         let mut outputs: Vec<TxOut> = vec![];
 
@@ -189,10 +186,8 @@ fn build_commit_transaction(
             script_pubkey: recipient.script_pubkey(),
         });
 
-        let excess = sum.checked_sub(input_total);
         let mut direct_return = false;
-        if excess.is_some() {
-            let excess = excess.unwrap();
+        if let Some(excess) = sum.checked_sub(input_total) {
             if excess >= 546 {
                 outputs.push(TxOut {
                     value: excess,
@@ -305,13 +300,22 @@ pub fn create_inscription_transactions(
         .push_opcode(OP_CHECKSIG)
         .push_opcode(OP_FALSE)
         .push_opcode(OP_IF)
-        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(rollup_name.as_bytes().to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(signature).unwrap())
-        .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
-        .push_slice(PushBytesBuf::try_from(sequencer_public_key).unwrap())
-        .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap());
+        .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).expect("Cannot push tag"))
+        .push_slice(
+            PushBytesBuf::try_from(rollup_name.as_bytes().to_vec())
+                .expect("Cannot push rollup name"),
+        )
+        .push_slice(
+            PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).expect("Cannot push signature tag"),
+        )
+        .push_slice(PushBytesBuf::try_from(signature).expect("Cannot push signature"))
+        .push_slice(
+            PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).expect("Cannot push public key tag"),
+        )
+        .push_slice(
+            PushBytesBuf::try_from(sequencer_public_key).expect("Cannot push sequencer public key"),
+        )
+        .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).expect("Cannot push random tag"));
     // This envelope is not finished yet. The random number will be added later and followed by the body
 
     // Start loop to find a random number that makes the first two bytes of the reveal tx hash 0
@@ -325,12 +329,13 @@ pub fn create_inscription_transactions(
         // push first random number and body tag
         reveal_script_builder = reveal_script_builder
             .push_int(random)
-            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap());
+            .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).expect("Cannot push body tag"));
 
         // push body in chunks of 520 bytes
         for chunk in body.chunks(520) {
-            reveal_script_builder =
-                reveal_script_builder.push_slice(PushBytesBuf::try_from(chunk.to_vec()).unwrap());
+            reveal_script_builder = reveal_script_builder.push_slice(
+                PushBytesBuf::try_from(chunk.to_vec()).expect("Cannot push body chunk"),
+            );
         }
         // push end if
         reveal_script_builder = reveal_script_builder.push_opcode(OP_ENDIF);
@@ -341,14 +346,14 @@ pub fn create_inscription_transactions(
         // create spend info for tapscript
         let taproot_spend_info = TaprootBuilder::new()
             .add_leaf(0, reveal_script.clone())
-            .unwrap()
+            .expect("Cannot add reveal script to taptree")
             .finalize(&secp256k1, public_key)
-            .unwrap();
+            .expect("Cannot finalize taptree");
 
         // create control block for tapscript
         let control_block = taproot_spend_info
             .control_block(&(reveal_script.clone(), LeafVersion::TapScript))
-            .unwrap();
+            .expect("Cannot create control block");
 
         // create commit tx address
         let commit_tx_address = Address::p2tr(
@@ -419,7 +424,7 @@ pub fn create_inscription_transactions(
                     TapLeafHash::from_script(&reveal_script, LeafVersion::TapScript),
                     bitcoin::sighash::TapSighashType::Default,
                 )
-                .unwrap();
+                .expect("Cannot create hash for signature");
 
             // sign reveal tx data
             let signature = secp256k1.sign_schnorr_with_rng(
@@ -467,7 +472,8 @@ mod tests {
     use bitcoin::{
         hashes::Hash,
         secp256k1::{constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature},
-        Address, ScriptBuf, TxOut, Txid, taproot::ControlBlock,
+        taproot::ControlBlock,
+        Address, ScriptBuf, TxOut, Txid,
     };
 
     use crate::{
@@ -782,8 +788,12 @@ mod tests {
 
         let utxo = utxos.get(0).unwrap();
         let script = ScriptBuf::from_hex("62a58f2674fd840b6144bea2e63ebd35c16d7fd40252a2f28b2a01a648df356343e47976d7906a0e688bf5e134b6fd21bd365c016b57b1ace85cf30bf1206e27").unwrap();
-        let control_block = ControlBlock::decode(&[193, 165, 246, 250, 6, 222, 28, 9, 130, 28, 217, 67, 171, 11, 229, 62, 48, 206, 219, 111, 155, 208, 6, 7, 119, 63, 146, 90, 227, 254, 231, 232, 249]).unwrap(); // should be 33 bytes
-        
+        let control_block = ControlBlock::decode(&[
+            193, 165, 246, 250, 6, 222, 28, 9, 130, 28, 217, 67, 171, 11, 229, 62, 48, 206, 219,
+            111, 155, 208, 6, 7, 119, 63, 146, 90, 227, 254, 231, 232, 249,
+        ])
+        .unwrap(); // should be 33 bytes
+
         let mut tx = super::build_reveal_transaction(
             TxOut {
                 value: utxo.amount,
@@ -796,7 +806,8 @@ mod tests {
             8.0,
             &script,
             &control_block,
-        ).unwrap();
+        )
+        .unwrap();
 
         tx.input[0].witness.push(&[0; SCHNORR_SIGNATURE_SIZE]);
         tx.input[0].witness.push(script.clone());
@@ -809,8 +820,6 @@ mod tests {
         assert_eq!(tx.output.len(), 1);
         assert_eq!(tx.output[0].value, 546);
         assert_eq!(tx.output[0].script_pubkey, address.script_pubkey());
-
-
 
         let utxo = utxos.get(2).unwrap();
 
@@ -831,7 +840,6 @@ mod tests {
         assert!(tx.is_err());
         assert_eq!(format!("{}", tx.unwrap_err()), "input UTXO not big enough");
 
-
         let utxo = utxos.get(2).unwrap();
 
         let tx = super::build_reveal_transaction(
@@ -850,7 +858,6 @@ mod tests {
 
         assert!(tx.is_err());
         assert_eq!(format!("{}", tx.unwrap_err()), "input UTXO not big enough");
-        
     }
     #[test]
     fn create_inscription_transactions() {

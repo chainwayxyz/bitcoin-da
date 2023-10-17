@@ -134,7 +134,13 @@ fn parse_relevant_inscriptions(
 pub fn parse_hex_transaction(
     tx_hex: &str,
 ) -> Result<Transaction, bitcoin::consensus::encode::Error> {
-    Transaction::consensus_decode(&mut &hex::decode(tx_hex).unwrap()[..])
+    if let Ok(reader) = hex::decode(tx_hex) {
+        Transaction::consensus_decode(&mut &reader[..])
+    } else {
+        Err(bitcoin::consensus::encode::Error::ParseFailed(
+            "Could not decode hex",
+        ))
+    }
 }
 #[cfg(test)]
 mod tests {

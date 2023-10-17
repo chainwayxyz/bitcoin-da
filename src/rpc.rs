@@ -1,6 +1,7 @@
 use core::fmt::Display;
 use core::str::FromStr;
 
+use anyhow::anyhow;
 use async_recursion::async_recursion;
 use bitcoin::block::{Header, Version};
 use bitcoin::hash_types::TxMerkleNode;
@@ -95,20 +96,19 @@ impl BitcoinNode {
         // sometimes requests to bitcoind are dropped without a reason
         // so impl. recursive retry
         // TODO: add max retries
-        if response.is_err() {
-            let error = response.unwrap_err();
+        if let Err(error) = response {
             // TODO: maybe remove is_request() check?
             if error.is_connect() || error.is_timeout() || error.is_request() {
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 return self.call(method, params).await;
             }
-            return Err(anyhow::anyhow!(error));
+            return Err(anyhow!(error));
         }
 
         let response = response.unwrap().json::<Response<T>>().await?;
 
         if let Some(error) = response.error {
-            return Err(anyhow::anyhow!(error));
+            return Err(anyhow!(error));
         }
 
         Ok(response.result.unwrap())
@@ -121,51 +121,37 @@ impl BitcoinNode {
 
     // get_block_hash returns the block hash of the block at the given height
     pub async fn get_block_hash(&self, height: u64) -> Result<String, anyhow::Error> {
-        self.call::<String>("getblockhash", vec![to_value(height).unwrap()])
+        self.call::<String>("getblockhash", vec![to_value(height)?])
             .await
     }
 
     // get_block returns the block at the given hash
     pub async fn get_block(&self, hash: String) -> Result<BitcoinBlock, anyhow::Error> {
         let result = self
-            .call::<Box<RawValue>>(
-                "getblock",
-                vec![to_value(hash.clone()).unwrap(), to_value(3).unwrap()],
-            )
+            .call::<Box<RawValue>>("getblock", vec![to_value(hash.clone())?, to_value(3)?])
             .await?
             .to_string();
 
         let full_block: serde_json::Value = serde_json::from_str(&result)?;
 
         let header: Header = Header {
-            bits: CompactTarget::from_consensus(
-                u32::from_str_radix(full_block.get("bits").unwrap().as_str().unwrap(), 16).unwrap(),
-            ),
-            merkle_root: TxMerkleNode::from_str(
-                full_block.get("merkleroot").unwrap().as_str().unwrap(),
-            )
-            .unwrap(),
-            nonce: full_block.get("nonce").unwrap().as_u64().unwrap() as u32,
-            prev_blockhash: BlockHash::from_str(
-                full_block
-                    .get("previousblockhash")
-                    .unwrap()
-                    .as_str()
-                    .unwrap(),
-            )
-            .unwrap(),
-            time: full_block.get("time").unwrap().as_u64().unwrap() as u32,
-            version: Version::from_consensus(
-                full_block.get("version").unwrap().as_u64().unwrap() as i32
-            ),
+            bits: CompactTarget::from_consensus(u32::from_str_radix(
+                full_block["bits"].as_str().unwrap(),
+                16,
+            )?),
+            merkle_root: TxMerkleNode::from_str(full_block["merkleroot"].as_str().unwrap())?,
+            nonce: full_block["nonce"].as_u64().unwrap() as u32,
+            prev_blockhash: BlockHash::from_str(full_block["previousblockhash"].as_str().unwrap())?,
+            time: full_block["time"].as_u64().unwrap() as u32,
+            version: Version::from_consensus(full_block["version"].as_u64().unwrap() as i32),
         };
 
-        let txdata = full_block.get("tx").unwrap().as_array().unwrap();
+        let txdata = full_block["tx"].as_array().unwrap();
 
         let txs: Vec<Transaction> = txdata
             .iter()
             .map(|tx| {
-                let tx_hex = tx.get("hex").unwrap().as_str().unwrap();
+                let tx_hex = tx["hex"].as_str().unwrap();
 
                 let transaction = parse_hex_transaction(tx_hex).unwrap(); // hex from rpc cannot be invalid
 
@@ -173,7 +159,7 @@ impl BitcoinNode {
             })
             .collect();
 
-        let height = full_block.get("height").unwrap().as_u64().unwrap();
+        let height = full_block["height"].as_u64().unwrap();
 
         Ok(BitcoinBlock {
             header: HeaderWrapper::new(header, txs.len() as u32, height),
@@ -184,14 +170,11 @@ impl BitcoinNode {
     // get_utxos returns all unspent transaction outputs for the wallets of bitcoind
     pub async fn get_utxos(&self) -> Result<Vec<UTXO>, anyhow::Error> {
         let utxos = self
-            .call::<Vec<UTXO>>(
-                "listunspent",
-                vec![to_value(0).unwrap(), to_value(9999999).unwrap()],
-            )
+            .call::<Vec<UTXO>>("listunspent", vec![to_value(0)?, to_value(9999999)?])
             .await?;
 
         if utxos.is_empty() {
-            return Err(anyhow::anyhow!("No UTXOs found"));
+            return Err(anyhow!("No UTXOs found"));
         }
 
         Ok(utxos)
@@ -200,9 +183,7 @@ impl BitcoinNode {
     // get_change_address returns a change address for the wallet of bitcoind
     async fn get_change_address(&self) -> Result<Address, anyhow::Error> {
         let address_string = self.call::<String>("getrawchangeaddress", vec![]).await?;
-        Ok(Address::from_str(&address_string)?
-            .require_network(self.network)
-            .unwrap())
+        Ok(Address::from_str(&address_string)?.require_network(self.network)?)
     }
 
     pub async fn get_change_addresses(&self) -> Result<[Address; 2], anyhow::Error> {
@@ -215,7 +196,7 @@ impl BitcoinNode {
     // estimate_smart_fee estimates the fee to confirm a transaction in the next block
     pub async fn estimate_smart_fee(&self) -> Result<f64, anyhow::Error> {
         let result = self
-            .call::<Box<RawValue>>("estimatesmartfee", vec![to_value(1).unwrap()])
+            .call::<Box<RawValue>>("estimatesmartfee", vec![to_value(1)?])
             .await?
             .to_string();
 
@@ -238,18 +219,18 @@ impl BitcoinNode {
         tx: String,
     ) -> Result<String, anyhow::Error> {
         let result = self
-            .call::<Box<RawValue>>("signrawtransactionwithwallet", vec![to_value(tx).unwrap()])
+            .call::<Box<RawValue>>("signrawtransactionwithwallet", vec![to_value(tx)?])
             .await?
             .to_string();
 
         let signed_tx: serde_json::Value = serde_json::from_str(&result)?;
 
-        Ok(signed_tx.get("hex").unwrap().as_str().unwrap().to_string())
+        Ok(signed_tx["hex"].as_str().unwrap().to_string())
     }
 
     // send_raw_transaction sends a raw transaction to the network
     pub async fn send_raw_transaction(&self, tx: String) -> Result<String, anyhow::Error> {
-        self.call::<String>("sendrawtransaction", vec![to_value(tx).unwrap()])
+        self.call::<String>("sendrawtransaction", vec![to_value(tx)?])
             .await
     }
 
@@ -262,16 +243,11 @@ impl BitcoinNode {
         if self.network == Network::Regtest {
             self.call::<Vec<BlockHash>>(
                 "generatetoaddress",
-                vec![
-                    to_value(blocks).unwrap(),
-                    to_value(address.to_string()).unwrap(),
-                ],
+                vec![to_value(blocks)?, to_value(address.to_string())?],
             )
             .await
         } else {
-            Err(anyhow::anyhow!(
-                "Cannot generate blocks on non-regtest network"
-            ))
+            Err(anyhow!("Cannot generate blocks on non-regtest network"))
         }
     }
 }
