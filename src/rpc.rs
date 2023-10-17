@@ -153,9 +153,7 @@ impl BitcoinNode {
             .map(|tx| {
                 let tx_hex = tx["hex"].as_str().unwrap();
 
-                let transaction = parse_hex_transaction(tx_hex).unwrap(); // hex from rpc cannot be invalid
-
-                transaction
+                parse_hex_transaction(tx_hex).unwrap() // hex from rpc cannot be invalid
             })
             .collect();
 

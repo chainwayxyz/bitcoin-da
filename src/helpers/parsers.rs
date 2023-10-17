@@ -88,39 +88,34 @@ fn parse_relevant_inscriptions(
                     // iterations possible in a malicous case
                     // so if any of the conditions does not hold
                     // we return an error
-                    if inside_envelope_index == 0 && bytes.as_bytes() != ROLLUP_NAME_TAG {
+                    if (inside_envelope_index == 0 && bytes.as_bytes() != ROLLUP_NAME_TAG)
+                        || (inside_envelope_index == 2 && bytes.as_bytes() != SIGNATURE_TAG)
+                        || (inside_envelope_index == 4 && bytes.as_bytes() != PUBLICKEY_TAG)
+                        || (inside_envelope_index == 6 && bytes.as_bytes() != RANDOM_TAG)
+                        || (inside_envelope_index == 8 && bytes.as_bytes() != BODY_TAG)
+                    {
                         return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 1
                         && bytes.as_bytes() != rollup_name.as_bytes()
                     {
                         return Err(ParserError::InvalidRollupName);
-                    } else if inside_envelope_index == 2 && bytes.as_bytes() != SIGNATURE_TAG {
-                        return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 3 {
                         signature.extend(bytes.as_bytes());
-                    } else if inside_envelope_index == 4 && bytes.as_bytes() != PUBLICKEY_TAG {
-                        return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index == 5 {
                         public_key.extend(bytes.as_bytes());
-                    } else if inside_envelope_index == 6 && bytes.as_bytes() != RANDOM_TAG {
-                        return Err(ParserError::EnvelopeHasIncorrectFormat);
-                    } else if inside_envelope_index == 8 && bytes.as_bytes() != BODY_TAG {
-                        return Err(ParserError::EnvelopeHasIncorrectFormat);
                     } else if inside_envelope_index >= 9 {
                         body.extend(bytes.as_bytes());
                     }
 
                     inside_envelope_index += 1;
-                } else {
-                    if bytes.len() == 0 {
-                        last_op = Some(OP_FALSE); // rust bitcoin pushes [] instead of op_false
-                    }
+                } else if bytes.is_empty() {
+                    last_op = Some(OP_FALSE); // rust bitcoin pushes [] instead of op_false
                 }
             }
         }
     }
 
-    if body.len() == 0 || signature.len() == 0 || public_key.len() == 0 {
+    if body.is_empty() || signature.is_empty() || public_key.is_empty() {
         return Err(ParserError::EnvelopeHasIncorrectFormat);
     }
 

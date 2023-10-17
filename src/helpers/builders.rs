@@ -94,7 +94,8 @@ fn get_size(
 fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyhow::Error> {
     let mut bigger_utxos: Vec<&UTXO> = utxos.iter().filter(|utxo| utxo.amount >= amount).collect();
     let mut sum: u64 = 0;
-    if bigger_utxos.len() > 0 {
+    
+    if !bigger_utxos.is_empty() {
         // sort vec by amount (small first)
         bigger_utxos.sort_by(|a, b| a.amount.cmp(&b.amount));
 
@@ -103,7 +104,7 @@ fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyh
         let utxo = bigger_utxos[0];
         sum += utxo.amount;
 
-        return Ok((vec![utxo.clone()], sum));
+        Ok((vec![utxo.clone()], sum))
     } else {
         let mut smaller_utxos: Vec<&UTXO> =
             utxos.iter().filter(|utxo| utxo.amount < amount).collect();
@@ -160,13 +161,13 @@ fn build_commit_transaction(
     );
     let mut last_size = size;
 
-    let utxos = utxos
+    let utxos: Vec<UTXO> = utxos
         .iter()
         .filter(|utxo| utxo.spendable && utxo.solvable && utxo.amount > 546)
-        .map(|u| u.clone())
-        .collect::<Vec<UTXO>>();
+        .cloned()
+        .collect();
 
-    if utxos.len() == 0 {
+    if !utxos.is_empty() {
         return Err(anyhow::anyhow!("no spendable UTXOs"));
     }
 

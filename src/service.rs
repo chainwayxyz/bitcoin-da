@@ -198,7 +198,7 @@ impl DaService for BitcoinService {
             }
 
             // check if the inscription in script is relevant to the rollup
-            let parsed_inscription = parse_transaction(&tx, &self.rollup_name);
+            let parsed_inscription = parse_transaction(tx, &self.rollup_name);
 
             if let Ok(inscription) = parsed_inscription {
                 let public_key = secp256k1::PublicKey::from_slice(&inscription.public_key);
@@ -334,9 +334,11 @@ impl DaService for BitcoinService {
                 }
 
                 let len = last_fee_rates.len();
-                let average = if len > 0 { sum / len as f64 } else { 12.0 };
-
-                average
+                if len > 0 {
+                    sum / len as f64
+                } else {
+                    12.0
+                }
             }
         };
 
