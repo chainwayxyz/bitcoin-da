@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::consensus::encode;
 use bitcoin::hashes::{sha256d, Hash};
-use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
-use bitcoin::{secp256k1, Address};
+use bitcoin::secp256k1::SecretKey;
+use bitcoin::Address;
 use hex::ToHex;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::services::da::DaService;
@@ -27,6 +27,7 @@ use crate::spec::proof::InclusionMultiProof;
 use crate::spec::utxo::UTXO;
 use crate::spec::{BitcoinSpec, RollupParams};
 use crate::verifier::BitcoinVerifier;
+use crate::{DEFAULT_FEE_RATES_TO_AVG_CNT, REVEAL_OUTPUT_AMOUNT};
 
 /// A service that provides data and data availability proofs for Bitcoin
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ pub struct BitcoinService {
     rollup_name: String,
     network: bitcoin::Network,
     address: Address<NetworkUnchecked>,
-    sequencer_da_private_key: String,
+    sequencer_da_private_key: SecretKey,
     last_fee_rates: Arc<Mutex<VecDeque<f64>>>,
     fee_rates_to_avg: usize,
 }
@@ -59,7 +60,7 @@ pub struct DaServiceConfig {
     pub sequencer_da_private_key: Option<String>,
 
     // number of last paid fee rates to average if estimation fails
-    pub fee_rates_to_avg: usize,
+    pub fee_rates_to_avg: Option<usize>,
 }
 
 const FINALITY_DEPTH: u64 = 4; // blocks
@@ -69,7 +70,7 @@ impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
     pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
         let network =
-            bitcoin::Network::from_str(&config.network).unwrap_or(bitcoin::Network::Regtest); // default to regtest (?)
+            bitcoin::Network::from_str(&config.network).expect("Invalid bitcoin network name");
 
         let client = BitcoinNode::new(
             config.node_url,
@@ -80,13 +81,19 @@ impl BitcoinService {
 
         let address = Address::from_str(&config.address).expect("Invalid bitcoin address");
 
+        let private_key =
+            SecretKey::from_str(&config.sequencer_da_private_key.unwrap_or("".to_owned()))
+                .expect("Invalid private key");
+
         Self::with_client(
             client,
             chain_params.rollup_name,
             network,
             address,
-            config.sequencer_da_private_key.unwrap_or("".to_owned()),
-            config.fee_rates_to_avg,
+            private_key,
+            config
+                .fee_rates_to_avg
+                .unwrap_or(DEFAULT_FEE_RATES_TO_AVG_CNT),
         )
     }
 
@@ -95,9 +102,15 @@ impl BitcoinService {
         rollup_name: String,
         network: bitcoin::Network,
         address: Address<NetworkUnchecked>,
-        sequencer_da_private_key: String,
+        sequencer_da_private_key: SecretKey,
         fee_rates_to_avg: usize,
     ) -> Self {
+        // We can't store address with the network check because it's not serializable
+        address
+            .clone()
+            .require_network(network)
+            .expect("Invalid address for network!");
+
         Self {
             client,
             rollup_name,
@@ -106,6 +119,46 @@ impl BitcoinService {
             sequencer_da_private_key,
             last_fee_rates: Arc::new(Mutex::new(VecDeque::new())),
             fee_rates_to_avg,
+        }
+    }
+
+    async fn get_fee_rate(&self) -> f64 {
+        match self.client.estimate_smart_fee().await {
+            Ok(fee) => {
+                let shared = self.last_fee_rates.clone();
+
+                let mut last_fee_rates = shared.lock().unwrap();
+                last_fee_rates.push_back(fee);
+
+                if last_fee_rates.len() > self.fee_rates_to_avg {
+                    last_fee_rates.pop_front();
+                }
+
+                fee
+            }
+            Err(_) => {
+                let shared = self.last_fee_rates.clone();
+
+                let last_fee_rates = shared.lock().unwrap();
+
+                let mut sum = 0.0;
+                for fee in last_fee_rates.iter() {
+                    sum += fee;
+                }
+
+                let len = last_fee_rates.len();
+                if len > 0 {
+                    sum / len as f64
+                } else {
+                    match self.network {
+                        bitcoin::Network::Bitcoin => 20.0,
+                        bitcoin::Network::Testnet => 1.5,
+                        bitcoin::Network::Signet => 1.5,
+                        bitcoin::Network::Regtest => 1.0,
+                        _ => 20.0, // don't know how we can get here but compiler wants it
+                    }
+                }
+            }
         }
     }
 }
@@ -201,17 +254,7 @@ impl DaService for BitcoinService {
             let parsed_inscription = parse_transaction(tx, &self.rollup_name);
 
             if let Ok(inscription) = parsed_inscription {
-                let public_key = secp256k1::PublicKey::from_slice(&inscription.public_key);
-                let signature = ecdsa::Signature::from_compact(&inscription.signature);
-                let message = Message::from_hashed_data::<sha256d::Hash>(&inscription.body);
-
-                let secp = Secp256k1::new();
-                if public_key.is_ok()
-                    && signature.is_ok()
-                    && secp
-                        .verify_ecdsa(&message, &signature.unwrap(), &public_key.unwrap())
-                        .is_ok()
-                {
+                if inscription.get_sig_verified_hash().is_some() {
                     // Decompress the blob
                     let decompressed_blob = decompress_blob(&inscription.body);
 
@@ -296,7 +339,7 @@ impl DaService for BitcoinService {
             .require_network(network)
             .expect("Invalid network for address");
         let rollup_name = self.rollup_name.clone();
-        let sequencer_da_private_key = self.sequencer_da_private_key.clone();
+        let sequencer_da_private_key = self.sequencer_da_private_key;
 
         // Compress the blob
         let blob = compress_blob(&blob);
@@ -310,37 +353,7 @@ impl DaService for BitcoinService {
 
         // get fee rate from node
         // if fail to get fee use avg of MAX_COUNT_OF_FEES_TO_AVG last used fees
-        let fee_sat_per_vbyte = match client.estimate_smart_fee().await {
-            Ok(fee) => {
-                let shared = self.last_fee_rates.clone();
-
-                let mut last_fee_rates = shared.lock().unwrap();
-                last_fee_rates.push_back(fee);
-
-                if last_fee_rates.len() > self.fee_rates_to_avg {
-                    last_fee_rates.pop_front();
-                }
-
-                fee
-            }
-            Err(_) => {
-                let shared = self.last_fee_rates.clone();
-
-                let last_fee_rates = shared.lock().unwrap();
-
-                let mut sum = 0.0;
-                for fee in last_fee_rates.iter() {
-                    sum += fee;
-                }
-
-                let len = last_fee_rates.len();
-                if len > 0 {
-                    sum / len as f64
-                } else {
-                    12.0
-                }
-            }
-        };
+        let fee_sat_per_vbyte = self.get_fee_rate().await;
 
         // create inscribe transactions
         let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
@@ -350,7 +363,7 @@ impl DaService for BitcoinService {
             public_key,
             utxos,
             address,
-            546,
+            REVEAL_OUTPUT_AMOUNT,
             fee_sat_per_vbyte,
             fee_sat_per_vbyte,
             network,
@@ -391,7 +404,7 @@ mod tests {
     use std::collections::HashSet;
 
     use bitcoin::hashes::{sha256d, Hash};
-    use bitcoin::secp256k1::{KeyPair, SecretKey};
+    use bitcoin::secp256k1::KeyPair;
     use bitcoin::{merkle_tree, Address, Txid};
     use sov_rollup_interface::services::da::DaService;
 
@@ -401,7 +414,25 @@ mod tests {
     use crate::service::DaServiceConfig;
     use crate::spec::RollupParams;
 
-    fn get_service() -> BitcoinService {
+    async fn get_service() -> BitcoinService {
+        let rpc = BitcoinNode::new(
+            "http://localhost:38332".to_string(),
+            "chainway".to_string(),
+            "topsecret".to_string(),
+            bitcoin::Network::Regtest,
+        );
+
+        // empty regtest mempool
+        rpc.generate_to_address(
+            Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
+                .unwrap()
+                .require_network(bitcoin::Network::Regtest)
+                .unwrap(),
+            1,
+        )
+        .await
+        .unwrap();
+
         let runtime_config = DaServiceConfig {
             node_url: "http://localhost:38332".to_string(),
             node_username: "chainway".to_string(),
@@ -411,7 +442,7 @@ mod tests {
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
-            fee_rates_to_avg: 2, // small to speed up tests
+            fee_rates_to_avg: Some(2), // small to speed up tests
         };
 
         BitcoinService::new(
@@ -424,7 +455,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_finalized_at() {
-        let da_service = get_service();
+        let da_service = get_service().await;
 
         da_service
             .get_finalized_at(132)
@@ -434,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_block_at() {
-        let da_service = get_service();
+        let da_service = get_service().await;
 
         da_service
             .get_block_at(132)
@@ -444,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_relevant_txs() {
-        let da_service = get_service();
+        let da_service = get_service().await;
 
         let block = da_service
             .get_block_at(132)
@@ -461,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn extract_relevant_txs_with_proof() {
-        let da_service = get_service();
+        let da_service = get_service().await;
 
         let block = da_service
             .get_block_at(142)
@@ -533,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_transaction() {
-        let da_service = get_service();
+        let da_service = get_service().await;
 
         let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
         da_service
@@ -544,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn fee_rates() {
-        let da_service = get_service();
+        let da_service = get_service().await;
         let fee = da_service
             .client
             .estimate_smart_fee()
@@ -584,26 +615,12 @@ mod tests {
             bitcoin::Network::Regtest,
         );
 
-        // empty regtest mempool
-        rpc.generate_to_address(
-            Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
-                .unwrap()
-                .require_network(bitcoin::Network::Regtest)
-                .unwrap(),
-            5,
-        )
-        .await
-        .unwrap();
-
-        let da_service = get_service();
+        let da_service = get_service().await;
         let secp = bitcoin::secp256k1::Secp256k1::new();
-        let da_pubkey = KeyPair::from_secret_key(
-            &secp,
-            &SecretKey::from_str(&da_service.sequencer_da_private_key).unwrap(),
-        )
-        .public_key()
-        .serialize()
-        .to_vec();
+        let da_pubkey = KeyPair::from_secret_key(&secp, &da_service.sequencer_da_private_key)
+            .public_key()
+            .serialize()
+            .to_vec();
 
         // incorrect private key
 

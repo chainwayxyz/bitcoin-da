@@ -19,7 +19,8 @@ use bitcoin::{
     psbt::Prevouts,
     script::PushBytesBuf,
     secp256k1::{
-        self, constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature, Secp256k1, XOnlyPublicKey,
+        self, constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature, Secp256k1, SecretKey,
+        XOnlyPublicKey,
     },
     sighash::SighashCache,
     taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder},
@@ -47,15 +48,13 @@ pub fn decompress_blob(blob: &[u8]) -> Vec<u8> {
 // Signs a message with a private key
 pub fn sign_blob_with_private_key(
     blob: &[u8],
-    private_key: &str,
+    private_key: &SecretKey,
 ) -> Result<(Vec<u8>, Vec<u8>), ()> {
     let message = sha256d::Hash::hash(blob).to_byte_array();
     let secp = Secp256k1::new();
-    let key = secp256k1::SecretKey::from_str(private_key)
-        .expect("Invalid private key while signing blob!");
-    let public_key = secp256k1::PublicKey::from_secret_key(&secp, &key);
+    let public_key = secp256k1::PublicKey::from_secret_key(&secp, private_key);
     let msg = secp256k1::Message::from_slice(&message).unwrap();
-    let sig = secp.sign_ecdsa(&msg, &key);
+    let sig = secp.sign_ecdsa(&msg, private_key);
     Ok((
         sig.serialize_compact().to_vec(),
         public_key.serialize().to_vec(),
@@ -94,7 +93,7 @@ fn get_size(
 fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyhow::Error> {
     let mut bigger_utxos: Vec<&UTXO> = utxos.iter().filter(|utxo| utxo.amount >= amount).collect();
     let mut sum: u64 = 0;
-    
+
     if !bigger_utxos.is_empty() {
         // sort vec by amount (small first)
         bigger_utxos.sort_by(|a, b| a.amount.cmp(&b.amount));
@@ -167,7 +166,7 @@ fn build_commit_transaction(
         .cloned()
         .collect();
 
-    if !utxos.is_empty() {
+    if utxos.is_empty() {
         return Err(anyhow::anyhow!("no spendable UTXOs"));
     }
 

@@ -3,8 +3,10 @@ use core::iter::Peekable;
 use bitcoin::blockdata::opcodes::all::{OP_ENDIF, OP_IF};
 use bitcoin::blockdata::script::{Instruction, Instructions};
 use bitcoin::consensus::Decodable;
+use bitcoin::hashes::{sha256d, Hash};
 use bitcoin::opcodes::OP_FALSE;
-use bitcoin::{Script, Transaction};
+use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
+use bitcoin::{secp256k1, Script, Transaction};
 use serde::{Deserialize, Serialize};
 
 use super::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
@@ -14,6 +16,29 @@ pub struct ParsedInscription {
     pub body: Vec<u8>,
     pub signature: Vec<u8>,
     pub public_key: Vec<u8>,
+}
+
+impl ParsedInscription {
+    /// Verifies the signature of the inscription and returns the hash of the body
+    pub fn get_sig_verified_hash(&self) -> Option<[u8; 32]> {
+        let public_key = secp256k1::PublicKey::from_slice(&self.public_key);
+        let signature = ecdsa::Signature::from_compact(&self.signature);
+        let hash = sha256d::Hash::hash(&self.body).to_byte_array();
+        let message = Message::from_slice(&hash).unwrap(); // cannot fail
+
+        let secp = Secp256k1::new();
+
+        if public_key.is_ok()
+            && signature.is_ok()
+            && secp
+                .verify_ecdsa(&message, &signature.unwrap(), &public_key.unwrap())
+                .is_ok()
+        {
+            Some(hash)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

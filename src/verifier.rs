@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
-use bitcoin::hashes::{sha256d, Hash};
-use bitcoin::secp256k1::{ecdsa, Message, Secp256k1};
-use bitcoin::{merkle_tree, secp256k1, Txid};
+use bitcoin::hashes::Hash;
+use bitcoin::{merkle_tree, Txid};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::{BlockHeaderTrait, DaSpec, DaVerifier};
@@ -78,8 +77,6 @@ impl DaVerifier for BitcoinVerifier {
         inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
         completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
-        let secp = Secp256k1::new();
-
         let validity_condition = ChainValidityCondition {
             prev_hash: block_header.prev_hash().to_byte_array(),
             block_hash: block_header.prev_hash().to_byte_array(),
@@ -126,26 +123,7 @@ impl DaVerifier for BitcoinVerifier {
 
                 // it must be parsed correctly
                 if let Ok(parsed_tx) = parse_transaction(tx, &self.rollup_name) {
-                    let blob_from_inscription = parsed_tx.body;
-                    let blob_hash: [u8; 32] =
-                        sha256d::Hash::hash(&blob_from_inscription).to_byte_array();
-
-                    let public_key = secp256k1::PublicKey::from_slice(&parsed_tx.public_key);
-
-                    let signature = ecdsa::Signature::from_compact(&parsed_tx.signature);
-                    let message = Message::from_slice(&blob_hash);
-
-                    if public_key.is_ok()
-                        && signature.is_ok()
-                        && message.is_ok()
-                        && secp
-                            .verify_ecdsa(
-                                &message.unwrap(),
-                                &signature.unwrap(),
-                                &public_key.unwrap(),
-                            )
-                            .is_ok()
-                    {
+                    if let Some(blob_hash) = parsed_tx.get_sig_verified_hash() {
                         let blob = blobs_iter.next();
 
                         assert!(blob.is_some(), "valid blob was not found in blobs");
@@ -160,7 +138,7 @@ impl DaVerifier for BitcoinVerifier {
                         );
 
                         // decompress the blob
-                        let decompressed_blob = decompress_blob(&blob_from_inscription);
+                        let decompressed_blob = decompress_blob(&parsed_tx.body);
 
                         // read the supplied blob from txs
                         let mut blob_content = blobs[index_completeness].blob.clone();
@@ -208,19 +186,16 @@ impl DaVerifier for BitcoinVerifier {
             .map(|tx| Txid::from_slice(tx).unwrap())
             .collect::<Vec<_>>();
 
-        let root_from_inclusion = merkle_tree::calculate_root(tx_hashes.into_iter());
+        if let Some(root_from_inclusion) = merkle_tree::calculate_root(tx_hashes.into_iter()) {
+            let root_from_inclusion = root_from_inclusion.to_raw_hash().to_byte_array();
 
-        assert!(
-            root_from_inclusion.is_some(),
-            "merkle root couldn't be computed"
-        );
+            // Check that the tx root in the block header matches the tx root in the inclusion proof.
+            assert_eq!(root_from_inclusion, tx_root, "inclusion proof is incorrect");
 
-        let root_from_inclusion = root_from_inclusion.unwrap().to_raw_hash().to_byte_array();
-
-        // Check that the tx root in the block header matches the tx root in the inclusion proof.
-        assert_eq!(root_from_inclusion, tx_root, "inclusion proof is incorrect");
-
-        Ok(validity_condition)
+            Ok(validity_condition)
+        } else {
+            panic!("merkle root couldn't be computed")
+        }
     }
 }
 
