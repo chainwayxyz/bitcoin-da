@@ -233,7 +233,7 @@ impl DaService for BitcoinService {
     }
 
     // Extract the blob transactions relevant to a particular rollup from a block.
-    fn extract_relevant_txs(
+    fn extract_relevant_blobs(
         &self,
         block: &Self::FilteredBlock,
     ) -> Vec<<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction> {
@@ -308,7 +308,7 @@ impl DaService for BitcoinService {
 
     // Extract the list blob transactions relevant to a particular rollup from a block, along with inclusion and
     // completeness proofs for that set of transactions. The output of this method will be passed to the verifier.
-    async fn extract_relevant_txs_with_proof(
+    async fn extract_relevant_blobs_with_proof(
         &self,
         block: &Self::FilteredBlock,
     ) -> (
@@ -321,7 +321,7 @@ impl DaService for BitcoinService {
             block.header.block_hash()
         );
 
-        let txs = self.extract_relevant_txs(block);
+        let txs = self.extract_relevant_blobs(block);
         let (inclusion_proof, completeness_proof) =
             self.get_extraction_proof(block, txs.as_slice()).await;
 
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_relevant_txs() {
+    async fn extract_relevant_blobs() {
         let da_service = get_service().await;
 
         let block = da_service
@@ -483,7 +483,7 @@ mod tests {
             .expect("Failed to get block");
         // panic!();
 
-        let txs = da_service.extract_relevant_txs(&block);
+        let txs = da_service.extract_relevant_blobs(&block);
 
         for tx in txs {
             println!("blob: {:?}", tx.blob);
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_relevant_txs_with_proof() {
+    async fn extract_relevant_blobs_with_proof() {
         let da_service = get_service().await;
 
         let block = da_service
@@ -500,7 +500,7 @@ mod tests {
             .expect("Failed to get block");
 
         let (txs, inclusion_proof, completeness_proof) =
-            da_service.extract_relevant_txs_with_proof(&block).await;
+            da_service.extract_relevant_blobs_with_proof(&block).await;
 
         // completeness proof
 
@@ -647,7 +647,7 @@ mod tests {
 
         let block = da_service.get_block_at(block.header.height).await.unwrap();
 
-        let txs = da_service.extract_relevant_txs(&block);
+        let txs = da_service.extract_relevant_blobs(&block);
 
         assert_eq!(
             txs.get(0).unwrap().sender.0,
