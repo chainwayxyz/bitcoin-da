@@ -47,3 +47,25 @@ impl<'a> TryFrom<&'a [u8]> for AddressWrapper {
         Ok(Self(value.to_vec()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use core::str::FromStr;
+
+    use super::AddressWrapper;
+
+    #[test]
+    fn test_from_str() {
+        let address = "66f68692c03eB9C0656D676f2F4bD13eba40D1B7"; // notice 0x prefix is missing
+
+        let address_wrapper = AddressWrapper::from_str(address).unwrap();
+
+        assert_eq!(
+            address_wrapper.0,
+            [
+                102, 246, 134, 146, 192, 62, 185, 192, 101, 109, 103, 111, 47, 75, 209, 62, 186,
+                64, 209, 183
+            ]
+        );
+    }
+}

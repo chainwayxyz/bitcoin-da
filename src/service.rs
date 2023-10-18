@@ -1,30 +1,33 @@
 use core::result::Result::Ok;
 use core::str::FromStr;
 use core::time::Duration;
+use std::sync::{Arc, Mutex};
 
+use alloc::collections::VecDeque;
 use async_trait::async_trait;
+use bitcoin::address::NetworkUnchecked;
 use bitcoin::consensus::encode;
-use bitcoin::hashes::Hash;
+use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::secp256k1::SecretKey;
 use bitcoin::Address;
 use hex::ToHex;
-use ord::SatPoint;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::services::da::DaService;
 use tracing::info;
 
 use crate::helpers::builders::{
-    create_inscription_transactions, get_satpoint_to_inscribe, sign_blob_with_private_key,
-    write_reveal_tx, compress_blob, decompress_blob,
+    compress_blob, create_inscription_transactions, decompress_blob, sign_blob_with_private_key,
+    write_reveal_tx,
 };
 use crate::helpers::parsers::parse_transaction;
 use crate::rpc::{BitcoinNode, RPCError};
-use crate::spec::address::AddressWrapper;
 use crate::spec::blob::BlobWithSender;
 use crate::spec::block::BitcoinBlock;
 use crate::spec::proof::InclusionMultiProof;
 use crate::spec::utxo::UTXO;
 use crate::spec::{BitcoinSpec, RollupParams};
 use crate::verifier::BitcoinVerifier;
+use crate::{DEFAULT_FEE_RATES_TO_AVG_CNT, REVEAL_OUTPUT_AMOUNT};
 
 /// A service that provides data and data availability proofs for Bitcoin
 #[derive(Debug, Clone)]
@@ -32,25 +35,10 @@ pub struct BitcoinService {
     client: BitcoinNode,
     rollup_name: String,
     network: bitcoin::Network,
-    address: String,
-    sequencer_da_private_key: String,
-}
-impl BitcoinService {
-    pub fn with_client(
-        client: BitcoinNode,
-        rollup_name: String,
-        network: bitcoin::Network,
-        address: String,
-        sequencer_da_private_key: String,
-    ) -> Self {
-        Self {
-            client,
-            rollup_name,
-            network,
-            address,
-            sequencer_da_private_key,
-        }
-    }
+    address: Address<NetworkUnchecked>,
+    sequencer_da_private_key: SecretKey,
+    last_fee_rates: Arc<Mutex<VecDeque<f64>>>,
+    fee_rates_to_avg: usize,
 }
 
 /// Runtime configuration for the DA service
@@ -62,13 +50,17 @@ pub struct DaServiceConfig {
     pub node_password: String,
 
     // network of the bitcoin node
-    pub network: Option<String>,
+    pub network: String,
 
     // taproot address that holds the funds of the sequencer
-    pub address: Option<String>,
+    // will be used as the change address for the inscribe transaction
+    pub address: String,
 
     // da private key of the sequencer
     pub sequencer_da_private_key: Option<String>,
+
+    // number of last paid fee rates to average if estimation fails
+    pub fee_rates_to_avg: Option<usize>,
 }
 
 const FINALITY_DEPTH: u64 = 4; // blocks
@@ -78,7 +70,7 @@ impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
     pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
         let network =
-            bitcoin::Network::from_str(&config.network.unwrap_or("regtest".to_owned())).unwrap(); // default to regtest (?)
+            bitcoin::Network::from_str(&config.network).expect("Invalid bitcoin network name");
 
         let client = BitcoinNode::new(
             config.node_url,
@@ -87,13 +79,87 @@ impl BitcoinService {
             network,
         );
 
+        let address = Address::from_str(&config.address).expect("Invalid bitcoin address");
+
+        let private_key =
+            SecretKey::from_str(&config.sequencer_da_private_key.unwrap_or("".to_owned()))
+                .expect("Invalid private key");
+
         Self::with_client(
             client,
             chain_params.rollup_name,
             network,
-            config.address.unwrap_or("".to_owned()),
-            config.sequencer_da_private_key.unwrap_or("".to_owned()),
+            address,
+            private_key,
+            config
+                .fee_rates_to_avg
+                .unwrap_or(DEFAULT_FEE_RATES_TO_AVG_CNT),
         )
+    }
+
+    pub fn with_client(
+        client: BitcoinNode,
+        rollup_name: String,
+        network: bitcoin::Network,
+        address: Address<NetworkUnchecked>,
+        sequencer_da_private_key: SecretKey,
+        fee_rates_to_avg: usize,
+    ) -> Self {
+        // We can't store address with the network check because it's not serializable
+        address
+            .clone()
+            .require_network(network)
+            .expect("Invalid address for network!");
+
+        Self {
+            client,
+            rollup_name,
+            network,
+            address,
+            sequencer_da_private_key,
+            last_fee_rates: Arc::new(Mutex::new(VecDeque::new())),
+            fee_rates_to_avg,
+        }
+    }
+
+    async fn get_fee_rate(&self) -> f64 {
+        match self.client.estimate_smart_fee().await {
+            Ok(fee) => {
+                let shared = self.last_fee_rates.clone();
+
+                let mut last_fee_rates = shared.lock().unwrap();
+                last_fee_rates.push_back(fee);
+
+                if last_fee_rates.len() > self.fee_rates_to_avg {
+                    last_fee_rates.pop_front();
+                }
+
+                fee
+            }
+            Err(_) => {
+                let shared = self.last_fee_rates.clone();
+
+                let last_fee_rates = shared.lock().unwrap();
+
+                let mut sum = 0.0;
+                for fee in last_fee_rates.iter() {
+                    sum += fee;
+                }
+
+                let len = last_fee_rates.len();
+                if len > 0 {
+                    sum / len as f64
+                } else {
+                    match self.network {
+                        bitcoin::Network::Bitcoin => 20.0,
+                        bitcoin::Network::Testnet => 1.5,
+                        bitcoin::Network::Signet => 1.5,
+                        bitcoin::Network::Regtest => 1.0,
+                        _ => 20.0, // don't know how we can get here but compiler wants it
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -111,7 +177,6 @@ impl DaService for BitcoinService {
     // If no such block exists, block until one does.
     async fn get_finalized_at(&self, height: u64) -> Result<Self::FilteredBlock, Self::Error> {
         let client = self.client.clone();
-        let rollup_name = self.rollup_name.clone();
         info!("Getting finalized block at height {}", height);
         loop {
             let block_count = client.get_block_count().await?;
@@ -126,7 +191,7 @@ impl DaService for BitcoinService {
         }
 
         let block_hash = client.get_block_hash(height).await?;
-        let block: BitcoinBlock = client.get_block(block_hash, &rollup_name).await?;
+        let block: BitcoinBlock = client.get_block(block_hash).await?;
 
         Ok(block)
     }
@@ -135,7 +200,6 @@ impl DaService for BitcoinService {
     // If no such block exists, block until one does.
     async fn get_block_at(&self, height: u64) -> Result<Self::FilteredBlock, Self::Error> {
         let client = self.client.clone();
-        let rollup_name = self.rollup_name.clone();
         info!("Getting block at height {}", height);
 
         let block_hash;
@@ -163,7 +227,7 @@ impl DaService for BitcoinService {
 
             break;
         }
-        let block = client.get_block(block_hash, &rollup_name).await?;
+        let block = client.get_block(block_hash).await?;
 
         Ok(block)
     }
@@ -177,27 +241,31 @@ impl DaService for BitcoinService {
 
         info!(
             "Extracting relevant txs from block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         // iterate over all transactions in the block
         for tx in block.txdata.iter() {
+            if !tx.txid().to_byte_array().as_slice().starts_with(&[0, 0]) {
+                continue;
+            }
+
             // check if the inscription in script is relevant to the rollup
-            let parsed_inscription = parse_transaction(&tx.transaction, &self.rollup_name);
+            let parsed_inscription = parse_transaction(tx, &self.rollup_name);
 
             if let Ok(inscription) = parsed_inscription {
-                let blob = inscription.body;
+                if inscription.get_sig_verified_hash().is_some() {
+                    // Decompress the blob
+                    let decompressed_blob = decompress_blob(&inscription.body);
 
-                // Decompress the blob
-                let decompressed_blob = decompress_blob(&blob);
+                    let relevant_tx = BlobWithSender::new(
+                        decompressed_blob,
+                        inscription.public_key,
+                        sha256d::Hash::hash(&inscription.body).to_byte_array(),
+                    );
 
-                let relevant_tx = BlobWithSender::new(
-                    decompressed_blob,
-                    tx.sender.clone(),
-                    tx.blob_hash,
-                );
-
-                txs.push(relevant_tx);
+                    txs.push(relevant_tx);
+                }
             }
         }
         txs
@@ -213,7 +281,7 @@ impl DaService for BitcoinService {
     ) {
         info!(
             "Getting extraction proof for block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         let mut completeness_proof = Vec::with_capacity(block.txdata.len());
@@ -222,11 +290,11 @@ impl DaService for BitcoinService {
             .txdata
             .iter()
             .map(|tx| {
-                let tx_hash = tx.transaction.txid().to_raw_hash().to_byte_array();
+                let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
                 // if tx_hash has two leading zeros, it is in the completeness proof
                 if tx_hash[0..2] == [0, 0] {
-                    completeness_proof.push(tx.transaction.clone());
+                    completeness_proof.push(tx.clone());
                 }
 
                 tx_hash
@@ -250,7 +318,7 @@ impl DaService for BitcoinService {
     ) {
         info!(
             "Extracting relevant txs with proof from block {:?}",
-            block.header.header.block_hash()
+            block.header.block_hash()
         );
 
         let txs = self.extract_relevant_txs(block);
@@ -265,30 +333,27 @@ impl DaService for BitcoinService {
 
         let blob = blob.to_vec();
         let network = self.network;
-        let address = self.address.clone();
+        let address = self
+            .address
+            .clone()
+            .require_network(network)
+            .expect("Invalid network for address");
         let rollup_name = self.rollup_name.clone();
-        let sequencer_da_private_key = self.sequencer_da_private_key.clone();
+        let sequencer_da_private_key = self.sequencer_da_private_key;
 
         // Compress the blob
         let blob = compress_blob(&blob);
 
-        // get two change addresses that are necessary for the inscribe transaction
-        let change_addresses: [Address; 2] = client.get_change_addresses().await?;
-
         // get all available utxos
         let utxos: Vec<UTXO> = client.get_utxos().await?;
-
-        let satpoint: SatPoint = get_satpoint_to_inscribe(&utxos[0]);
-
-        // return funds to sequencer address
-        let destination_address = Address::from_str(&address.clone())?.require_network(network)?;
 
         // sign the blob for authentication of the sequencer
         let (signature, public_key) = sign_blob_with_private_key(&blob, &sequencer_da_private_key)
             .expect("Sequencer sign the blob");
 
         // get fee rate from node
-        let fee_sat_per_vbyte: f64 = client.estimate_smart_fee().await?;
+        // if fail to get fee use avg of MAX_COUNT_OF_FEES_TO_AVG last used fees
+        let fee_sat_per_vbyte = self.get_fee_rate().await;
 
         // create inscribe transactions
         let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
@@ -296,10 +361,9 @@ impl DaService for BitcoinService {
             blob,
             signature,
             public_key,
-            satpoint,
             utxos,
-            change_addresses,
-            destination_address,
+            address,
+            REVEAL_OUTPUT_AMOUNT,
             fee_sat_per_vbyte,
             fee_sat_per_vbyte,
             network,
@@ -336,27 +400,49 @@ impl DaService for BitcoinService {
 
 #[cfg(test)]
 mod tests {
+    use core::str::FromStr;
     use std::collections::HashSet;
 
-    use bitcoin::hashes::Hash;
-    use bitcoin::{merkle_tree, Txid};
+    use bitcoin::hashes::{sha256d, Hash};
+    use bitcoin::secp256k1::KeyPair;
+    use bitcoin::{merkle_tree, Address, Txid};
     use sov_rollup_interface::services::da::DaService;
 
     use super::BitcoinService;
     use crate::helpers::parsers::parse_transaction;
+    use crate::rpc::BitcoinNode;
     use crate::service::DaServiceConfig;
     use crate::spec::RollupParams;
 
     async fn get_service() -> BitcoinService {
+        let rpc = BitcoinNode::new(
+            "http://localhost:38332".to_string(),
+            "chainway".to_string(),
+            "topsecret".to_string(),
+            bitcoin::Network::Regtest,
+        );
+
+        // empty regtest mempool
+        rpc.generate_to_address(
+            Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
+                .unwrap()
+                .require_network(bitcoin::Network::Regtest)
+                .unwrap(),
+            1,
+        )
+        .await
+        .unwrap();
+
         let runtime_config = DaServiceConfig {
             node_url: "http://localhost:38332".to_string(),
             node_username: "chainway".to_string(),
             node_password: "topsecret".to_string(),
-            network: Some("regtest".to_string()),
-            address: Some("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl".to_string()),
+            network: "regtest".to_string(),
+            address: "bcrt1qy85zdv5se9d9ceg9nvay36t6j86z95fny4rdzu".to_string(),
             sequencer_da_private_key: Some(
                 "E9873D79C6D87DC0FB6A5778633389F4453213303DA61F20BD67FC233AA33262".to_string(), // Test key, safe to publish
             ),
+            fee_rates_to_avg: Some(2), // small to speed up tests
         };
 
         BitcoinService::new(
@@ -415,32 +501,29 @@ mod tests {
 
         let (txs, inclusion_proof, completeness_proof) =
             da_service.extract_relevant_txs_with_proof(&block).await;
-        
+
         // completeness proof
 
         // create hash set of txs
-        let mut txs_to_check = txs
-            .iter()
-            .map(|blob| blob.hash)
-            .collect::<HashSet<_>>();
+        let mut txs_to_check = txs.iter().map(|blob| blob.hash).collect::<HashSet<_>>();
 
         // Check every 00 bytes tx that parsed correctly is in txs
-        let mut completeness_tx_hashes = completeness_proof.iter().map(|tx| {
-            let tx_hash = tx.txid().to_raw_hash().to_byte_array();
+        let mut completeness_tx_hashes = completeness_proof
+            .iter()
+            .map(|tx| {
+                let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
-            // it must parsed correctly
-            let parsed_tx = parse_transaction(tx, &da_service.rollup_name);
-            if parsed_tx.is_ok() {
-                let blob = parsed_tx.unwrap().body;
-                let blob_hash: [u8; 32] = bitcoin::hashes::sha256d::Hash::hash(&blob).to_byte_array();
-                // it must be in txs
-                assert!(txs_to_check.remove(&blob_hash));
-            }
+                // it must parsed correctly
+                if let Ok(parsed_tx) = parse_transaction(tx, &da_service.rollup_name) {
+                    let blob = parsed_tx.body;
+                    let blob_hash: [u8; 32] = sha256d::Hash::hash(&blob).to_byte_array();
+                    // it must be in txs
+                    assert!(txs_to_check.remove(&blob_hash));
+                }
 
-            tx_hash
-        })
-        .collect::<HashSet<_>>();
-        
+                tx_hash
+            })
+            .collect::<HashSet<_>>();
 
         // assert no extra txs than the ones in the completeness proof are left
         assert!(txs_to_check.is_empty());
@@ -457,12 +540,7 @@ mod tests {
 
         println!("\n--- Completeness proof verified ---\n");
 
-        let tx_root = block
-            .header
-            .header
-            .merkle_root
-            .to_raw_hash()
-            .to_byte_array();
+        let tx_root = block.header.merkle_root().to_raw_hash().to_byte_array();
 
         // Inclusion proof is all the txs in the block.
         let tx_hashes = inclusion_proof
@@ -493,5 +571,88 @@ mod tests {
             .send_transaction(blob.as_bytes())
             .await
             .expect("Failed to send transaction");
+    }
+
+    #[tokio::test]
+    async fn fee_rates() {
+        let da_service = get_service().await;
+        let fee = da_service
+            .client
+            .estimate_smart_fee()
+            .await
+            .expect("Failed to get fee");
+
+        let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
+
+        for i in 0..3 {
+            println!("Sending tx #{}", i);
+            da_service
+                .send_transaction(blob.as_bytes())
+                .await
+                .expect("Failed to send transaction");
+        }
+
+        {
+            let shared = da_service.last_fee_rates.clone();
+
+            let mut last_fee_rates = shared.lock().unwrap();
+
+            let mut fees: Vec<f64> = vec![];
+            for _ in 0..da_service.fee_rates_to_avg {
+                fees.push(fee);
+            }
+
+            assert_eq!(last_fee_rates.make_contiguous(), fees.as_slice());
+        }
+    }
+
+    #[tokio::test]
+    async fn check_signature() {
+        let rpc = BitcoinNode::new(
+            "http://localhost:38332".to_string(),
+            "chainway".to_string(),
+            "topsecret".to_string(),
+            bitcoin::Network::Regtest,
+        );
+
+        let da_service = get_service().await;
+        let secp = bitcoin::secp256k1::Secp256k1::new();
+        let da_pubkey = KeyPair::from_secret_key(&secp, &da_service.sequencer_da_private_key)
+            .public_key()
+            .serialize()
+            .to_vec();
+
+        // incorrect private key
+
+        let blob = "01000000b60000002adbd76606f2bd4125080e6f44df7ba2d728409955c80b8438eb1828ddf23e3c12188eeac7ecf6323be0ed5668e21cc354fca90d8bca513d6c0a240c26afa7007b758bf2e7670fafaf6bf0015ce0ff5aa802306fc7e3f45762853ffc37180fe64a0000000001fea6ac5b8751120fb62fff67b54d2eac66aef307c7dde1d394dea1e09e43dd44c800000000000000135d23aee8cb15c890831ff36db170157acaac31df9bba6cd40e7329e608eabd0000000000000000";
+        da_service
+            .send_transaction(blob.as_bytes())
+            .await
+            .expect("Failed to send transaction");
+
+        let hashes = rpc
+            .generate_to_address(
+                Address::from_str("bcrt1qxuds94z3pqwqea2p4f4ev4f25s6uu7y3avljrl")
+                    .unwrap()
+                    .require_network(bitcoin::Network::Regtest)
+                    .unwrap(),
+                1,
+            )
+            .await
+            .unwrap();
+
+        let block_hash = hashes[0];
+
+        let block = rpc.get_block(block_hash.to_string()).await.unwrap();
+
+        let block = da_service.get_block_at(block.header.height).await.unwrap();
+
+        let txs = da_service.extract_relevant_txs(&block);
+
+        assert_eq!(
+            txs.get(0).unwrap().sender.0,
+            da_pubkey,
+            "Publickey recovered incorrectly!"
+        );
     }
 }
