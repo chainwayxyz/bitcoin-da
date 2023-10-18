@@ -12,7 +12,7 @@ rust-version = "1.66"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", rev = "ca038a7" }
+sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", rev = "d6f398c" }
 
 tokio = { version = "1", features = ["full"], optional = true }
 
