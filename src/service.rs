@@ -105,8 +105,8 @@ impl BitcoinService {
 
         let wallets = client.list_wallets().await.expect("Failed to list loaded wallets");
 
-        if wallets.len() != 1 {
-            panic!("Expected exactly one loaded wallet, found {}", wallets.len());
+        if wallets.is_empty() {
+            panic!("No loaded wallet found!");
         }
 
         Self {
