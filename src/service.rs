@@ -122,7 +122,7 @@ impl BitcoinService {
         }
     }
 
-    async fn get_fee_rate(&self) -> f64 {
+    pub async fn get_fee_rate(&self) -> f64 {
         match self.client.estimate_smart_fee().await {
             Ok(fee) => {
                 let shared = self.last_fee_rates.clone();
