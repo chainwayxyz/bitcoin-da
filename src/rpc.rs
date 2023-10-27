@@ -75,6 +75,7 @@ impl BitcoinNode {
         }
     }
 
+    // TODO: add max retries
     #[async_recursion]
     async fn call<T: serde::de::DeserializeOwned>(
         &self,
@@ -232,6 +233,10 @@ impl BitcoinNode {
             .await
     }
 
+    pub async fn list_wallets(&self) -> Result<Vec<String>, anyhow::Error> {
+        self.call::<Vec<String>>("listwallets", vec![]).await
+    }
+
     #[cfg(test)]
     pub async fn generate_to_address(
         &self,
@@ -271,6 +276,17 @@ mod tests {
 
         utxos.iter().for_each(|utxo| {
             println!("address: {}, amount: {}", utxo.address, utxo.amount);
+        });
+    }
+
+    #[tokio::test]
+    async fn list_wallets() {
+        let node = get_bitcoin_node();
+
+        let wallets = node.list_wallets().await.unwrap();
+
+        wallets.iter().for_each(|wallet| {
+            println!("wallet: {}", wallet);
         });
     }
 }

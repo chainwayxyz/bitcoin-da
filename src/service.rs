@@ -64,7 +64,7 @@ const POLLING_INTERVAL: u64 = 10; // seconds
 
 impl BitcoinService {
     // Create a new instance of the DA service from the given configuration.
-    pub fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
+    pub async fn new(config: DaServiceConfig, chain_params: RollupParams) -> Self {
         let network =
             bitcoin::Network::from_str(&config.network).expect("Invalid bitcoin network name");
 
@@ -87,10 +87,10 @@ impl BitcoinService {
             network,
             address,
             private_key,
-        )
+        ).await
     }
 
-    pub fn with_client(
+    pub async fn with_client(
         client: BitcoinNode,
         rollup_name: String,
         network: bitcoin::Network,
@@ -102,6 +102,12 @@ impl BitcoinService {
             .clone()
             .require_network(network)
             .expect("Invalid address for network!");
+
+        let wallets = client.list_wallets().await.expect("Failed to list loaded wallets");
+
+        if wallets.is_empty() {
+            panic!("No loaded wallet found!");
+        }
 
         Self {
             client,
@@ -415,7 +421,7 @@ mod tests {
             RollupParams {
                 rollup_name: "sov-btc".to_string(),
             },
-        )
+        ).await
     }
 
     #[tokio::test]
