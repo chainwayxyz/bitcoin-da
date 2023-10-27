@@ -1,9 +1,7 @@
 use core::result::Result::Ok;
 use core::str::FromStr;
 use core::time::Duration;
-use std::sync::{Arc, Mutex};
 
-use alloc::collections::VecDeque;
 use async_trait::async_trait;
 use bitcoin::address::NetworkUnchecked;
 use bitcoin::consensus::encode;
@@ -27,7 +25,7 @@ use crate::spec::proof::InclusionMultiProof;
 use crate::spec::utxo::UTXO;
 use crate::spec::{BitcoinSpec, RollupParams};
 use crate::verifier::BitcoinVerifier;
-use crate::{DEFAULT_FEE_RATES_TO_AVG_CNT, REVEAL_OUTPUT_AMOUNT};
+use crate::REVEAL_OUTPUT_AMOUNT;
 
 /// A service that provides data and data availability proofs for Bitcoin
 #[derive(Debug, Clone)]
@@ -37,8 +35,6 @@ pub struct BitcoinService {
     network: bitcoin::Network,
     address: Address<NetworkUnchecked>,
     sequencer_da_private_key: SecretKey,
-    last_fee_rates: Arc<Mutex<VecDeque<f64>>>,
-    fee_rates_to_avg: usize,
 }
 
 /// Runtime configuration for the DA service
@@ -91,9 +87,6 @@ impl BitcoinService {
             network,
             address,
             private_key,
-            config
-                .fee_rates_to_avg
-                .unwrap_or(DEFAULT_FEE_RATES_TO_AVG_CNT),
         )
     }
 
@@ -103,7 +96,6 @@ impl BitcoinService {
         network: bitcoin::Network,
         address: Address<NetworkUnchecked>,
         sequencer_da_private_key: SecretKey,
-        fee_rates_to_avg: usize,
     ) -> Self {
         // We can't store address with the network check because it's not serializable
         address
@@ -117,49 +109,85 @@ impl BitcoinService {
             network,
             address,
             sequencer_da_private_key,
-            last_fee_rates: Arc::new(Mutex::new(VecDeque::new())),
-            fee_rates_to_avg,
         }
     }
 
-    async fn get_fee_rate(&self) -> f64 {
-        match self.client.estimate_smart_fee().await {
-            Ok(fee) => {
-                let shared = self.last_fee_rates.clone();
+    pub async fn send_transaction_with_fee_rate(
+        &self,
+        blob: &[u8],
+        fee_sat_per_vbyte: f64,
+    ) -> Result<(), anyhow::Error> {
+        let client = self.client.clone();
 
-                let mut last_fee_rates = shared.lock().unwrap();
-                last_fee_rates.push_back(fee);
+        let blob = blob.to_vec();
+        let network = self.network;
+        let address = self
+            .address
+            .clone()
+            .require_network(network)
+            .expect("Invalid network for address");
+        let rollup_name = self.rollup_name.clone();
+        let sequencer_da_private_key = self.sequencer_da_private_key;
 
-                if last_fee_rates.len() > self.fee_rates_to_avg {
-                    last_fee_rates.pop_front();
-                }
+        // Compress the blob
+        let blob = compress_blob(&blob);
 
-                fee
-            }
-            Err(_) => {
-                let shared = self.last_fee_rates.clone();
+        // get all available utxos
+        let utxos: Vec<UTXO> = client.get_utxos().await?;
 
-                let last_fee_rates = shared.lock().unwrap();
+        // sign the blob for authentication of the sequencer
+        let (signature, public_key) = sign_blob_with_private_key(&blob, &sequencer_da_private_key)
+            .expect("Sequencer sign the blob");
 
-                let mut sum = 0.0;
-                for fee in last_fee_rates.iter() {
-                    sum += fee;
-                }
+        // create inscribe transactions
+        let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
+            &rollup_name,
+            blob,
+            signature,
+            public_key,
+            utxos,
+            address,
+            REVEAL_OUTPUT_AMOUNT,
+            fee_sat_per_vbyte,
+            fee_sat_per_vbyte,
+            network,
+        )?;
 
-                let len = last_fee_rates.len();
-                if len > 0 {
-                    sum / len as f64
-                } else {
-                    match self.network {
-                        bitcoin::Network::Bitcoin => 20.0,
-                        bitcoin::Network::Testnet => 1.5,
-                        bitcoin::Network::Signet => 1.5,
-                        bitcoin::Network::Regtest => 1.0,
-                        _ => 20.0, // don't know how we can get here but compiler wants it
-                    }
-                }
-            }
+        // sign inscribe transactions
+        let serialized_unsigned_commit_tx = &encode::serialize(&unsigned_commit_tx);
+        let signed_raw_commit_tx = client
+            .sign_raw_transaction_with_wallet(serialized_unsigned_commit_tx.encode_hex())
+            .await?;
+
+        // send inscribe transactions
+        client.send_raw_transaction(signed_raw_commit_tx).await?;
+
+        // serialize reveal tx
+        let serialized_reveal_tx = &encode::serialize(&reveal_tx);
+
+        // write reveal tx to file, it can be used to continue revealing blob if something goes wrong
+        write_reveal_tx(
+            serialized_reveal_tx,
+            unsigned_commit_tx.txid().to_raw_hash().to_string(),
+        );
+
+        // send reveal tx
+        let reveal_tx_hash = client
+            .send_raw_transaction(serialized_reveal_tx.encode_hex())
+            .await?;
+
+        info!("Blob inscribe tx sent. Hash: {}", reveal_tx_hash);
+
+        Ok(())
+    }
+
+    pub async fn get_fee_rate(&self) -> Result<f64, anyhow::Error> {
+        if self.network == bitcoin::Network::Regtest {
+            // sometimes local mempool is empty, node cannot estimate
+            return Ok(2.0);
         }
+
+        self.client.estimate_smart_fee().await
     }
 }
 
@@ -329,72 +357,9 @@ impl DaService for BitcoinService {
     }
 
     async fn send_transaction(&self, blob: &[u8]) -> Result<(), Self::Error> {
-        let client = self.client.clone();
-
-        let blob = blob.to_vec();
-        let network = self.network;
-        let address = self
-            .address
-            .clone()
-            .require_network(network)
-            .expect("Invalid network for address");
-        let rollup_name = self.rollup_name.clone();
-        let sequencer_da_private_key = self.sequencer_da_private_key;
-
-        // Compress the blob
-        let blob = compress_blob(&blob);
-
-        // get all available utxos
-        let utxos: Vec<UTXO> = client.get_utxos().await?;
-
-        // sign the blob for authentication of the sequencer
-        let (signature, public_key) = sign_blob_with_private_key(&blob, &sequencer_da_private_key)
-            .expect("Sequencer sign the blob");
-
-        // get fee rate from node
-        // if fail to get fee use avg of MAX_COUNT_OF_FEES_TO_AVG last used fees
-        let fee_sat_per_vbyte = self.get_fee_rate().await;
-
-        // create inscribe transactions
-        let (unsigned_commit_tx, reveal_tx) = create_inscription_transactions(
-            &rollup_name,
-            blob,
-            signature,
-            public_key,
-            utxos,
-            address,
-            REVEAL_OUTPUT_AMOUNT,
-            fee_sat_per_vbyte,
-            fee_sat_per_vbyte,
-            network,
-        )?;
-
-        // sign inscribe transactions
-        let serialized_unsigned_commit_tx = &encode::serialize(&unsigned_commit_tx);
-        let signed_raw_commit_tx = client
-            .sign_raw_transaction_with_wallet(serialized_unsigned_commit_tx.encode_hex())
-            .await?;
-
-        // send inscribe transactions
-        client.send_raw_transaction(signed_raw_commit_tx).await?;
-
-        // serialize reveal tx
-        let serialized_reveal_tx = &encode::serialize(&reveal_tx);
-
-        // write reveal tx to file, it can be used to continue revealing blob if something goes wrong
-        write_reveal_tx(
-            serialized_reveal_tx,
-            unsigned_commit_tx.txid().to_raw_hash().to_string(),
-        );
-
-        // send reveal tx
-        let reveal_tx_hash = client
-            .send_raw_transaction(serialized_reveal_tx.encode_hex())
-            .await?;
-
-        info!("Blob inscribe tx sent. Hash: {}", reveal_tx_hash);
-
-        Ok(())
+        let fee_sat_per_vbyte = self.get_fee_rate().await?;
+        self.send_transaction_with_fee_rate(blob, fee_sat_per_vbyte)
+            .await
     }
 }
 
@@ -574,9 +539,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fee_rates() {
+    async fn send_transaction_with_fee_rate() {
         let da_service = get_service().await;
-        let fee = da_service
+        let fee_rate = da_service
             .client
             .estimate_smart_fee()
             .await
@@ -587,22 +552,9 @@ mod tests {
         for i in 0..3 {
             println!("Sending tx #{}", i);
             da_service
-                .send_transaction(blob.as_bytes())
+                .send_transaction_with_fee_rate(blob.as_bytes(), fee_rate)
                 .await
                 .expect("Failed to send transaction");
-        }
-
-        {
-            let shared = da_service.last_fee_rates.clone();
-
-            let mut last_fee_rates = shared.lock().unwrap();
-
-            let mut fees: Vec<f64> = vec![];
-            for _ in 0..da_service.fee_rates_to_avg {
-                fees.push(fee);
-            }
-
-            assert_eq!(last_fee_rates.make_contiguous(), fees.as_slice());
         }
     }
 
