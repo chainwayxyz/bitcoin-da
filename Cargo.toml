@@ -12,7 +12,7 @@ rust-version = "1.66"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", rev = "77317c7" }
+sov-rollup-interface = { git = "https://github.com/Sovereign-Labs/sovereign-sdk", rev = "7cf2e64" }
 
 tokio = { version = "1", features = ["full"], optional = true }
 
@@ -24,7 +24,7 @@ base64 = "0.13.1"
 hex = { version = "0.4.3", features = ["serde"] }
 tracing = "0.1.37"
 rand = "0.8.5"
-serde = "1.0.188"
+serde = "1.0.190"
 serde_json = { version = "1.0.105", features = ["raw_value"] }
 async-trait = "0.1.73"
 borsh = "0.10.3"
@@ -37,6 +37,6 @@ async-recursion = "1.0.5"
 
 
 [features]
-default = []
+default = ["native"]
 native = ["dep:tokio", "dep:reqwest", "sov-rollup-interface/native"]
 verifier = []
