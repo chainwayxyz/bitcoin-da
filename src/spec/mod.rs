@@ -6,7 +6,6 @@ use self::blob::BlobWithSender;
 use self::block_hash::BlockHashWrapper;
 use self::header::HeaderWrapper;
 use self::proof::InclusionMultiProof;
-
 use crate::verifier::ChainValidityCondition;
 
 pub mod address;
@@ -14,15 +13,18 @@ pub mod blob;
 pub mod block;
 mod block_hash;
 pub mod header;
+#[cfg(feature = "native")]
+pub mod header_stream;
 pub mod proof;
 pub mod transaction;
 pub mod utxo;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct BitcoinSpec;
 
 pub struct RollupParams {
     pub rollup_name: String,
+    pub reveal_tx_id_prefix: Vec<u8>,
 }
 
 impl DaSpec for BitcoinSpec {

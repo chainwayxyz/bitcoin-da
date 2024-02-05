@@ -164,22 +164,17 @@ pub fn parse_hex_transaction(
 }
 #[cfg(test)]
 mod tests {
-    use bitcoin::{
-        key::XOnlyPublicKey,
-        opcodes::{
-            all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
-            OP_FALSE, OP_TRUE,
-        },
-        script::{self, PushBytesBuf},
-        Transaction,
-    };
-
-    use crate::helpers::parsers::{parse_transaction, ParserError};
+    use bitcoin::key::XOnlyPublicKey;
+    use bitcoin::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
+    use bitcoin::opcodes::{OP_FALSE, OP_TRUE};
+    use bitcoin::script::{self, PushBytesBuf};
+    use bitcoin::Transaction;
 
     use super::{
         parse_relevant_inscriptions, BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG,
         SIGNATURE_TAG,
     };
+    use crate::helpers::parsers::{parse_transaction, ParserError};
 
     #[test]
     fn correct() {
@@ -191,7 +186,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -224,7 +219,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("not-sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -251,7 +246,7 @@ mod tests {
             .push_opcode(OP_FALSE)
             .push_opcode(OP_IF)
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -301,7 +296,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
             .push_int(0)
             .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
@@ -325,7 +320,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -348,7 +343,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).unwrap())
@@ -401,7 +396,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_opcode(OP_TRUE)
             .push_opcode(OP_IF)
             .push_x_only_key(&XOnlyPublicKey::from_slice(&[1; 32]).unwrap())
@@ -431,7 +426,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -446,7 +441,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([1u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![1u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![1u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())
@@ -476,7 +471,7 @@ mod tests {
             .push_slice(PushBytesBuf::try_from(ROLLUP_NAME_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from("sov-btc".as_bytes().to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(SIGNATURE_TAG.to_vec()).unwrap())
-            .push_slice(PushBytesBuf::try_from([0u8; 64]).unwrap())
+            .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(PUBLICKEY_TAG.to_vec()).unwrap())
             .push_slice(PushBytesBuf::try_from(vec![0u8; 64]).unwrap())
             .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).unwrap())

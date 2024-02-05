@@ -1,9 +1,12 @@
-use bitcoin::{hashes::Hash, BlockHash};
+use std::fmt::Display;
+
+use bitcoin::hashes::Hash;
+use bitcoin::BlockHash;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::BlockHashTrait;
 
 // BlockHashWrapper is a wrapper around BlockHash to implement BlockHashTrait
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct BlockHashWrapper(pub BlockHash);
 
 impl BlockHashTrait for BlockHashWrapper {}
@@ -23,5 +26,11 @@ impl AsRef<[u8]> for BlockHashWrapper {
 impl BlockHashWrapper {
     pub fn to_byte_array(&self) -> [u8; 32] {
         self.0.as_raw_hash().to_byte_array()
+    }
+}
+
+impl Display for BlockHashWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }

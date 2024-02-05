@@ -1,37 +1,29 @@
-use core::{result::Result::Ok, str::FromStr};
-use std::{
-    fs::File,
-    io::{BufWriter, Write},
-};
+use core::result::Result::Ok;
+use core::str::FromStr;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 
 use anyhow::anyhow;
+use bitcoin::absolute::LockTime;
+use bitcoin::blockdata::opcodes::all::{OP_CHECKSIG, OP_ENDIF, OP_IF};
+use bitcoin::blockdata::opcodes::OP_FALSE;
+use bitcoin::blockdata::script;
+use bitcoin::hashes::{sha256d, Hash};
+use bitcoin::key::{TapTweak, TweakedPublicKey, UntweakedKeyPair};
+use bitcoin::psbt::Prevouts;
+use bitcoin::script::PushBytesBuf;
+use bitcoin::secp256k1::constants::SCHNORR_SIGNATURE_SIZE;
+use bitcoin::secp256k1::schnorr::Signature;
+use bitcoin::secp256k1::{self, Secp256k1, SecretKey, XOnlyPublicKey};
+use bitcoin::sighash::SighashCache;
+use bitcoin::taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder};
 use bitcoin::{
-    absolute::LockTime,
-    blockdata::{
-        opcodes::{
-            all::{OP_CHECKSIG, OP_ENDIF, OP_IF},
-            OP_FALSE,
-        },
-        script,
-    },
-    hashes::{sha256d, Hash},
-    key::{TapTweak, TweakedPublicKey, UntweakedKeyPair},
-    psbt::Prevouts,
-    script::PushBytesBuf,
-    secp256k1::{
-        self, constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature, Secp256k1, SecretKey,
-        XOnlyPublicKey,
-    },
-    sighash::SighashCache,
-    taproot::{ControlBlock, LeafVersion, TapLeafHash, TaprootBuilder},
     Address, Network, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut, Txid, Witness,
 };
 use brotli::{CompressorWriter, DecompressorWriter};
 
-use crate::{
-    helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG},
-    spec::utxo::UTXO,
-};
+use crate::helpers::{BODY_TAG, PUBLICKEY_TAG, RANDOM_TAG, ROLLUP_NAME_TAG, SIGNATURE_TAG};
+use crate::spec::utxo::UTXO;
 
 pub fn compress_blob(blob: &[u8]) -> Vec<u8> {
     let mut writer = CompressorWriter::new(Vec::new(), 4096, 11, 22);
@@ -61,6 +53,7 @@ pub fn sign_blob_with_private_key(
     ))
 }
 
+#[allow(clippy::ptr_arg)]
 fn get_size(
     inputs: &Vec<TxIn>,
     outputs: &Vec<TxOut>,
@@ -82,6 +75,7 @@ fn get_size(
         );
     }
 
+    #[allow(clippy::unnecessary_unwrap)]
     if tx.input.len() == 1 && script.is_some() && control_block.is_some() {
         tx.input[0].witness.push(script.unwrap());
         tx.input[0].witness.push(control_block.unwrap().serialize());
@@ -90,7 +84,7 @@ fn get_size(
     tx.vsize()
 }
 
-fn choose_utxos(utxos: &Vec<UTXO>, amount: u64) -> Result<(Vec<UTXO>, u64), anyhow::Error> {
+fn choose_utxos(utxos: &[UTXO], amount: u64) -> Result<(Vec<UTXO>, u64), anyhow::Error> {
     let mut bigger_utxos: Vec<&UTXO> = utxos.iter().filter(|utxo| utxo.amount >= amount).collect();
     let mut sum: u64 = 0;
 
@@ -229,6 +223,7 @@ fn build_commit_transaction(
     Ok(tx)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_reveal_transaction(
     input_utxo: TxOut,
     input_txid: Txid,
@@ -277,6 +272,7 @@ fn build_reveal_transaction(
 // TODO: parametrize hardness
 // so tests are easier
 // Creates the inscription transactions (commit and reveal)
+#[allow(clippy::too_many_arguments)]
 pub fn create_inscription_transactions(
     rollup_name: &str,
     body: Vec<u8>,
@@ -288,6 +284,7 @@ pub fn create_inscription_transactions(
     commit_fee_rate: f64,
     reveal_fee_rate: f64,
     network: Network,
+    reveal_tx_prefix: &[u8],
 ) -> Result<(Transaction, Transaction), anyhow::Error> {
     // Create commit key
     let secp256k1 = Secp256k1::new();
@@ -318,8 +315,8 @@ pub fn create_inscription_transactions(
         .push_slice(PushBytesBuf::try_from(RANDOM_TAG.to_vec()).expect("Cannot push random tag"));
     // This envelope is not finished yet. The random number will be added later and followed by the body
 
-    // Start loop to find a random number that makes the first two bytes of the reveal tx hash 0
-    let mut random: i64 = 0;
+    // Start loop to find a 'nonce' i.e. random number that makes the reveal tx hash starting with zeros given length
+    let mut nonce: i64 = 0;
     loop {
         let utxos = utxos.clone();
         let recipient = recipient.clone();
@@ -328,7 +325,7 @@ pub fn create_inscription_transactions(
 
         // push first random number and body tag
         reveal_script_builder = reveal_script_builder
-            .push_int(random)
+            .push_int(nonce)
             .push_slice(PushBytesBuf::try_from(BODY_TAG.to_vec()).expect("Cannot push body tag"));
 
         // push body in chunks of 520 bytes
@@ -411,8 +408,8 @@ pub fn create_inscription_transactions(
 
         let reveal_hash = reveal_tx.txid().as_raw_hash().to_byte_array();
 
-        // check if first two bytes are 0
-        if reveal_hash.starts_with(&[0, 0]) {
+        // check if first N bytes equal to the given prefix
+        if reveal_hash.starts_with(reveal_tx_prefix) {
             // start signing reveal tx
             let mut sighash_cache = SighashCache::new(&mut reveal_tx);
 
@@ -455,7 +452,7 @@ pub fn create_inscription_transactions(
             return Ok((unsigned_commit_tx, reveal_tx));
         }
 
-        random += 1;
+        nonce += 1;
     }
 }
 
@@ -469,20 +466,15 @@ pub fn write_reveal_tx(tx: &[u8], tx_id: String) {
 mod tests {
     use core::str::FromStr;
 
-    use bitcoin::{
-        hashes::Hash,
-        secp256k1::{constants::SCHNORR_SIGNATURE_SIZE, schnorr::Signature},
-        taproot::ControlBlock,
-        Address, ScriptBuf, TxOut, Txid,
-    };
+    use bitcoin::hashes::Hash;
+    use bitcoin::secp256k1::constants::SCHNORR_SIGNATURE_SIZE;
+    use bitcoin::secp256k1::schnorr::Signature;
+    use bitcoin::taproot::ControlBlock;
+    use bitcoin::{Address, ScriptBuf, TxOut, Txid};
 
-    use crate::{
-        helpers::{
-            builders::{compress_blob, decompress_blob},
-            parsers::parse_transaction,
-        },
-        spec::utxo::UTXO,
-    };
+    use crate::helpers::builders::{compress_blob, decompress_blob};
+    use crate::helpers::parsers::parse_transaction;
+    use crate::spec::utxo::UTXO;
 
     #[test]
     fn compression_decompression() {
@@ -523,6 +515,7 @@ mod tests {
         std::fs::remove_file("reveal_test_tx.tx").unwrap();
     }
 
+    #[allow(clippy::type_complexity)]
     fn get_mock_data() -> (&'static str, Vec<u8>, Vec<u8>, Vec<u8>, Address, Vec<UTXO>) {
         let rollup_name = "test_rollup";
         let body = vec![100; 1000];
@@ -578,14 +571,14 @@ mod tests {
             },
         ];
 
-        return (
+        (
             rollup_name,
             body,
             signature,
             sequencer_public_key,
             address,
             utxos,
-        );
+        )
     }
 
     #[test]
@@ -786,7 +779,7 @@ mod tests {
     fn build_reveal_transaction() {
         let (_, _, _, _, address, utxos) = get_mock_data();
 
-        let utxo = utxos.get(0).unwrap();
+        let utxo = utxos.first().unwrap();
         let script = ScriptBuf::from_hex("62a58f2674fd840b6144bea2e63ebd35c16d7fd40252a2f28b2a01a648df356343e47976d7906a0e688bf5e134b6fd21bd365c016b57b1ace85cf30bf1206e27").unwrap();
         let control_block = ControlBlock::decode(&[
             193, 165, 246, 250, 6, 222, 28, 9, 130, 28, 217, 67, 171, 11, 229, 62, 48, 206, 219,
@@ -809,7 +802,7 @@ mod tests {
         )
         .unwrap();
 
-        tx.input[0].witness.push(&[0; SCHNORR_SIGNATURE_SIZE]);
+        tx.input[0].witness.push([0; SCHNORR_SIGNATURE_SIZE]);
         tx.input[0].witness.push(script.clone());
         tx.input[0].witness.push(control_block.serialize());
 
@@ -863,6 +856,7 @@ mod tests {
     fn create_inscription_transactions() {
         let (rollup_name, body, signature, sequencer_public_key, address, utxos) = get_mock_data();
 
+        let tx_prefix = &[0u8];
         let (commit, reveal) = super::create_inscription_transactions(
             rollup_name,
             body.clone(),
@@ -874,11 +868,12 @@ mod tests {
             12.0,
             10.0,
             bitcoin::Network::Bitcoin,
+            tx_prefix,
         )
         .unwrap();
 
         // check pow
-        assert!(reveal.txid().as_byte_array().starts_with(&[0, 0]));
+        assert!(reveal.txid().as_byte_array().starts_with(tx_prefix));
 
         // check outputs
         assert_eq!(commit.output.len(), 2, "commit tx should have 2 outputs");
