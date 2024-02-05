@@ -14,7 +14,8 @@ use crate::helpers::parsers::parse_transaction;
 use crate::spec::BitcoinSpec;
 
 pub struct BitcoinVerifier {
-    pub rollup_name: String,
+    rollup_name: String,
+    reveal_tx_id_prefix: Vec<u8>,
 }
 
 // TODO: custom errors based on our implementation
@@ -66,16 +67,17 @@ impl DaVerifier for BitcoinVerifier {
     fn new(params: <Self::Spec as DaSpec>::ChainParams) -> Self {
         Self {
             rollup_name: params.rollup_name,
+            reveal_tx_id_prefix: params.reveal_tx_id_prefix,
         }
     }
 
     // Verify that the given list of blob transactions is complete and correct.
     fn verify_relevant_tx_list(
         &self,
-        block_header: &<Self::Spec as sov_rollup_interface::da::DaSpec>::BlockHeader,
-        blobs: &[<Self::Spec as sov_rollup_interface::da::DaSpec>::BlobTransaction],
-        inclusion_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::InclusionMultiProof,
-        completeness_proof: <Self::Spec as sov_rollup_interface::da::DaSpec>::CompletenessProof,
+        block_header: &<Self::Spec as DaSpec>::BlockHeader,
+        blobs: &[<Self::Spec as DaSpec>::BlobTransaction],
+        inclusion_proof: <Self::Spec as DaSpec>::InclusionMultiProof,
+        completeness_proof: <Self::Spec as DaSpec>::CompletenessProof,
     ) -> Result<<Self::Spec as DaSpec>::ValidityCondition, Self::Error> {
         let validity_condition = ChainValidityCondition {
             prev_hash: block_header.prev_hash().to_byte_array(),
@@ -89,17 +91,17 @@ impl DaVerifier for BitcoinVerifier {
 
         let mut prev_index_in_inclusion = 0;
 
-        // Check every 00 bytes tx that parsed correctly is in blobs
+        let prefix = self.reveal_tx_id_prefix.as_slice();
+        // Check starting bytes tx that parsed correctly is in blobs
         let mut completeness_tx_hashes = completeness_proof
             .iter()
             .enumerate()
             .map(|(index_completeness, tx)| {
                 let tx_hash = tx.txid().to_raw_hash().to_byte_array();
 
-                // make sure it is 00 bytes
-                assert_eq!(
-                    tx_hash[0..2],
-                    [0, 0],
+                // make sure it starts with the correct prefix
+                assert!(
+                    tx_hash.starts_with(prefix),
                     "non-relevant tx found in completeness proof"
                 );
 
@@ -160,10 +162,10 @@ impl DaVerifier for BitcoinVerifier {
             "completeness proof is incorrect"
         );
 
-        // no 00 bytes left behind completeness proof
+        // no prefix bytes left behind completeness proof
         inclusion_proof.txs.iter().for_each(|tx_hash| {
-            if tx_hash[0..2] == [0, 0] {
-                // assert all 00 transactions are included in completeness proof
+            if tx_hash.starts_with(prefix) {
+                // assert all prefixed transactions are included in completeness proof
                 assert!(
                     completeness_tx_hashes.remove(tx_hash),
                     "relevant transaction in DA block was not included in completeness proof"
@@ -202,28 +204,26 @@ impl DaVerifier for BitcoinVerifier {
 #[cfg(test)]
 mod tests {
 
-    use bitcoin::{
-        block::{Header, Version},
-        hash_types::TxMerkleNode,
-        hashes::{sha256d, Hash},
-        string::FromHexStr,
-        BlockHash, CompactTarget,
-    };
+    // Transactions for testing is prepared with 2 leading zeros
+    // So verifier takes in [0, 0]
+
     use core::str::FromStr;
+
+    use bitcoin::block::{Header, Version};
+    use bitcoin::hash_types::TxMerkleNode;
+    use bitcoin::hashes::{sha256d, Hash};
+    use bitcoin::string::FromHexStr;
+    use bitcoin::{BlockHash, CompactTarget};
     use sov_rollup_interface::da::{DaSpec, DaVerifier};
 
-    use crate::{
-        helpers::{
-            builders::decompress_blob,
-            parsers::{parse_hex_transaction, parse_transaction},
-        },
-        spec::{
-            blob::BlobWithSender, header::HeaderWrapper, proof::InclusionMultiProof,
-            transaction::Transaction,
-        },
-    };
-
     use super::BitcoinVerifier;
+    use crate::helpers::builders::decompress_blob;
+    use crate::helpers::parsers::{parse_hex_transaction, parse_transaction};
+    use crate::spec::blob::BlobWithSender;
+    use crate::spec::header::HeaderWrapper;
+    use crate::spec::proof::InclusionMultiProof;
+    use crate::spec::transaction::Transaction;
+    use crate::spec::RollupParams;
 
     fn get_mock_txs() -> Vec<Transaction> {
         // relevant txs are on 6, 8, 10, 12 indices
@@ -251,6 +251,7 @@ mod tests {
         )
     }
 
+    #[allow(clippy::type_complexity)]
     fn get_mock_data() -> (
         <<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::BlockHeader, // block header
         <<BitcoinVerifier as DaVerifier>::Spec as DaSpec>::InclusionMultiProof, // inclusion proof
@@ -305,9 +306,10 @@ mod tests {
 
     #[test]
     fn correct() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, completeness_proof, txs) = get_mock_data();
 
@@ -324,9 +326,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "inclusion proof is incorrect")]
     fn extra_tx_in_inclusion() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, mut inclusion_proof, completeness_proof, txs) = get_mock_data();
 
@@ -347,9 +350,10 @@ mod tests {
         expected = "tx in completeness proof is not found in DA block or order was not preserved"
     )]
     fn missing_tx_in_inclusion() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, mut inclusion_proof, completeness_proof, txs) = get_mock_data();
 
@@ -368,9 +372,10 @@ mod tests {
     #[test]
     #[should_panic = "tx in completeness proof is not found in DA block or order was not preserved"]
     fn empty_inclusion() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, mut inclusion_proof, completeness_proof, txs) = get_mock_data();
 
@@ -389,9 +394,10 @@ mod tests {
     #[test]
     #[should_panic = "inclusion proof is incorrect"]
     fn break_order_of_inclusion() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, mut inclusion_proof, completeness_proof, txs) = get_mock_data();
 
@@ -410,9 +416,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "completeness proof is incorrect")]
     fn missing_tx_in_completeness_proof() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, mut completeness_proof, txs) = get_mock_data();
 
@@ -431,9 +438,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "completeness proof is incorrect")]
     fn empty_completeness_proof() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, mut completeness_proof, txs) = get_mock_data();
 
@@ -452,9 +460,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "non-relevant tx found in completeness proof")]
     fn non_relevant_tx_in_completeness_proof() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, mut completeness_proof, txs) = get_mock_data();
 
@@ -475,9 +484,10 @@ mod tests {
         expected = "tx in completeness proof is not found in DA block or order was not preserved"
     )]
     fn break_completeness_proof_order() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, mut completeness_proof, mut txs) = get_mock_data();
 
@@ -497,9 +507,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "blobs was tampered with")]
     fn break_rel_tx_order() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
 
@@ -518,9 +529,10 @@ mod tests {
     #[test]
     #[should_panic = "tx in completeness proof is not found in DA block or order was not preserved"]
     fn break_rel_tx_and_completeness_proof_order() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, mut completeness_proof, mut txs) = get_mock_data();
 
@@ -540,9 +552,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "blob content was modified")]
     fn tamper_rel_tx_content() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
 
@@ -563,9 +576,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "incorrect sender in blob")]
     fn tamper_senders() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
 
@@ -590,9 +604,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "valid blob was not found in blobs")]
     fn missing_rel_tx() {
-        let verifier = BitcoinVerifier {
+        let verifier = BitcoinVerifier::new(RollupParams {
             rollup_name: "sov-btc".to_string(),
-        };
+            reveal_tx_id_prefix: vec![0, 0],
+        });
 
         let (block_header, inclusion_proof, completeness_proof, mut txs) = get_mock_data();
 

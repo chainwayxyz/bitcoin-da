@@ -1,5 +1,5 @@
-#![cfg_attr(not(feature = "native"), no_std)]
 mod helpers;
+#[cfg(feature = "native")]
 mod rpc;
 pub mod spec;
 
