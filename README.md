@@ -1,5 +1,8 @@
 # BitcoinDA
 
+> [!WARNING]
+> This adapter is now maintained in [Citrea monorepo](https://github.com/chainwayxyz/citrea)
+
 BitcoinDA is a Data Availability adapter making Bitcoin compatible with the Sovereign SDK. None of its code is
 suitable for production use. It contains known security flaws and numerous inefficiencies.
 
